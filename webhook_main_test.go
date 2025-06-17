@@ -888,13 +888,17 @@ func Test_InjectReplicaLabel(t *testing.T) {
 	tests := map[string]struct {
 		replicaIndex         int
 		groupName            string
+		clusterName          string
+		namespace            string
 		expectedReplicaLabel string
 	}{
 		"injectReplicaLabel with replicaIndex 0": {
 			// should create a patch to set the replicaIndex label with {$WORKER_GROUP_NAME-$REPLICA_INDEX}
 			replicaIndex:         0,
 			groupName:            "test-group-name",
-			expectedReplicaLabel: "test-group-name-0",
+			clusterName:          "test-cluster",
+			namespace:            "test-namespace",
+			expectedReplicaLabel: "test-namespace-test-cluster-test-group-name-0",
 		},
 	}
 
@@ -902,7 +906,7 @@ func Test_InjectReplicaLabel(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			expectedPatches := []patch{}
-			injectReplicaLabel("test-cluster", "test-namespace", tc.replicaIndex, tc.groupName, &expectedPatches)
+			injectReplicaLabel(tc.clusterName, tc.namespace, tc.replicaIndex, tc.groupName, &expectedPatches)
 			assert.Equal(t, "/metadata/labels/replicaIndex", expectedPatches[0]["path"])
 			assert.Equal(t, tc.expectedReplicaLabel, expectedPatches[0]["value"])
 		})
@@ -921,7 +925,7 @@ func Test_InjectPodAffinity(t *testing.T) {
 			testPod:              getTestTPUWorker("test-cluster", "test-group", "test-namespace", "tpu-v4-podslice", "2x2x1", "4"),
 			replicaIndex:         0,
 			groupName:            "test-group-name",
-			expectedReplicaLabel: "test-group-name-0",
+			expectedReplicaLabel: "test-namespace-test-cluster-test-group-name-0",
 		},
 	}
 
@@ -1357,7 +1361,7 @@ func Test_MutatePod(t *testing.T) {
 			expectedWorkerID:     "0",
 			expectedReplicaID:    0,
 			expectedWorkerName:   fmt.Sprintf("%s-%d", "test-group", 0),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
 		},
 		"mutatePod first Pod in multi-host TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1374,7 +1378,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
 		},
 		"mutatePod subsequent Pod in multi-host TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1391,7 +1395,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
 		},
 		"mutatePod first multi-host Pod in subsequent multi-slice TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1408,7 +1412,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 1),
+			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 1),
 		},
 		"mutatePod subsequent multi-host Pod in subsequent multi-slice TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1425,7 +1429,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 1),
+			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 1),
 		},
 	}
 
@@ -1473,7 +1477,7 @@ func Test_MutatePod(t *testing.T) {
 					expectedNamePatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_NAME", "value": tc.expectedWorkerName}})
 					expectedHostnamesPatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_WORKER_HOSTNAMES", "value": tc.expectedHostnames}})
 					assert.Equal(t, tc.expectedReplicaLabel, patches[0]["value"])
-					assert.Equal(t, fmt.Sprintf("%s-%s", tc.expectedReplicaLabel, tc.expectedWorkerID), patches[1]["value"])
+					assert.Equal(t, fmt.Sprintf("test-group-%d-%s", tc.expectedReplicaID, tc.expectedWorkerID), patches[1]["value"])
 					assert.Equal(t, fmt.Sprintf("%s-%s", "test-cluster", utils.HeadlessServiceSuffix), patches[3]["value"])
 					assert.Equal(t, expectedHostnamesPatch, patches[4]["value"])
 					assert.Equal(t, expectedIDPatch, patches[5]["value"])
@@ -1490,11 +1494,11 @@ func Test_GenerateHeadlessServiceName(t *testing.T) {
 		expectedServiceName string
 	}{
 		"RayCluster name + -{HEADLESS_SERVICE_SUFFIX} is less than 50 chars, no truncation": {
-			testRayClusterName:  "test-raycluster",          // 15 chars
+			testRayClusterName:  "test-raycluster", // 15 chars
 			expectedServiceName: utils.CheckName(fmt.Sprintf("%s-%s", "test-raycluster", utils.HeadlessServiceSuffix)),
 		},
 		"RayCluster name + -{HEADLESS_SERVICE_SUFFIX} is more than 50 chars, name is truncated": {
-			testRayClusterName:  "extremely-really-really-long-test-raycluster-name",  // 49 chars
+			testRayClusterName:  "extremely-really-really-long-test-raycluster-name", // 49 chars
 			expectedServiceName: utils.CheckName(fmt.Sprintf("%s-%s", "extremely-really-really-long-test-raycluster-name", utils.HeadlessServiceSuffix)),
 		},
 	}

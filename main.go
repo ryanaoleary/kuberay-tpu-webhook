@@ -292,7 +292,7 @@ func injectHostnames(clusterName string, hostNames string, envPath string, conta
 func injectReplicaLabel(clusterName string, namespace string, replicaIndex int, workerGroupName string, patches *[]patch) {
 	labelPatch := patch{"op": "replace"}
 	labelPath := "/metadata/labels/replicaIndex"
-	replicaLabelValue := workerGroupName + "-" + strconv.Itoa(replicaIndex)
+	replicaLabelValue := fmt.Sprintf("%s-%s-%s-%d", namespace, clusterName, workerGroupName, replicaIndex)
 
 	klog.V(1).InfoS("injectReplicaLabel", "RayCluster", namespace+"/"+clusterName, "replicaIndex", replicaLabelValue)
 
@@ -305,10 +305,10 @@ func injectReplicaLabel(clusterName string, namespace string, replicaIndex int, 
 // injectPodAffinity injects pod affinity and anti-affinity scheduling constraints using replicaIndex label
 func injectPodAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, patches *[]patch) {
 	key := "replicaIndex"
-	value := workerGroupName + "-" + strconv.Itoa(replicaIndex)
-	topologyKey := "cloud.google.com/gke-nodepool"
 	clusterName := pod.Labels["ray.io/cluster"]
 	namespace := pod.Namespace
+	value := fmt.Sprintf("%s-%s-%s-%d", namespace, clusterName, workerGroupName, replicaIndex)
+	topologyKey := "cloud.google.com/gke-nodepool"
 
 	klog.V(1).InfoS("injectPodAffinity", "RayCluster", namespace+"/"+clusterName, "podAffinity match label", value)
 
@@ -663,7 +663,7 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 
 	if numOfHosts > 1 {
 		// inject hostname into pod spec for DNS records
-		hostname := fmt.Sprintf(groupName+"-%d-%d", replicaIndex, tpuWorkerID)
+		hostname := fmt.Sprintf("%s-%d-%d", groupName, replicaIndex, tpuWorkerID)
 		klog.V(1).InfoS("mutatePod", "RayCluster", namespace+"/"+clusterName, "hostname", hostname)
 		hostnamePatch := patch{"op": "add"}
 		hostnamePatch["path"] = "/spec/hostname"
