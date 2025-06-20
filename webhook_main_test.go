@@ -888,17 +888,13 @@ func Test_InjectReplicaLabel(t *testing.T) {
 	tests := map[string]struct {
 		replicaIndex         int
 		groupName            string
-		clusterName          string
-		namespace            string
 		expectedReplicaLabel string
 	}{
 		"injectReplicaLabel with replicaIndex 0": {
 			// should create a patch to set the replicaIndex label with {$WORKER_GROUP_NAME-$REPLICA_INDEX}
 			replicaIndex:         0,
 			groupName:            "test-group-name",
-			clusterName:          "test-cluster",
-			namespace:            "test-namespace",
-			expectedReplicaLabel: "test-namespace-test-cluster-test-group-name-0",
+			expectedReplicaLabel: "test-group-name-0",
 		},
 	}
 
@@ -906,7 +902,7 @@ func Test_InjectReplicaLabel(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			expectedPatches := []patch{}
-			injectReplicaLabel(tc.clusterName, tc.namespace, tc.replicaIndex, tc.groupName, &expectedPatches)
+			injectReplicaLabel("test-cluster", "test-namespace", tc.replicaIndex, tc.groupName, &expectedPatches)
 			assert.Equal(t, "/metadata/labels/replicaIndex", expectedPatches[0]["path"])
 			assert.Equal(t, tc.expectedReplicaLabel, expectedPatches[0]["value"])
 		})
@@ -919,13 +915,15 @@ func Test_InjectPodAffinity(t *testing.T) {
 		replicaIndex         int
 		groupName            string
 		expectedReplicaLabel string
+		expectedClusterLabel string
 	}{
 		"injectPodAffinity with replicaIndex label": {
 			// should create a patch to create a podAffinity for the replicaIndex label
 			testPod:              getTestTPUWorker("test-cluster", "test-group", "test-namespace", "tpu-v4-podslice", "2x2x1", "4"),
 			replicaIndex:         0,
 			groupName:            "test-group-name",
-			expectedReplicaLabel: "test-namespace-test-cluster-test-group-name-0",
+			expectedReplicaLabel: "test-group-name-0",
+			expectedClusterLabel: "test-cluster",
 		},
 	}
 
@@ -937,8 +935,24 @@ func Test_InjectPodAffinity(t *testing.T) {
 			patchValue := expectedPatches[0]["value"]
 			affinity := patchValue.(corev1.Affinity)
 			assert.Equal(t, "/spec/affinity", expectedPatches[0]["path"])
-			labelValue := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0].LabelSelector.MatchExpressions[0].Values[0]
-			assert.Equal(t, labelValue, tc.expectedReplicaLabel)
+
+			affinityTerms := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
+
+			// Convert label selector match expressions to a map for easier test assertions
+			matchExprs := map[string]metav1.LabelSelectorRequirement{}
+			for _, expr := range affinityTerms.LabelSelector.MatchExpressions {
+				matchExprs[expr.Key] = expr
+			}
+
+			// Validate replicaIndex label selector
+			replicaExpr := matchExprs["replicaIndex"]
+			assert.Equal(t, metav1.LabelSelectorOpIn, replicaExpr.Operator)
+			assert.Equal(t, []string{tc.expectedReplicaLabel}, replicaExpr.Values)
+
+			// Validate ray.io/cluster label selector
+			clusterExpr := matchExprs["ray.io/cluster"]
+			assert.Equal(t, metav1.LabelSelectorOpIn, clusterExpr.Operator)
+			assert.Equal(t, []string{tc.expectedClusterLabel}, clusterExpr.Values)
 		})
 	}
 }
@@ -1361,7 +1375,7 @@ func Test_MutatePod(t *testing.T) {
 			expectedWorkerID:     "0",
 			expectedReplicaID:    0,
 			expectedWorkerName:   fmt.Sprintf("%s-%d", "test-group", 0),
-			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
 		},
 		"mutatePod first Pod in multi-host TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1378,7 +1392,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
 		},
 		"mutatePod subsequent Pod in multi-host TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1395,7 +1409,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 0),
+			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
 		},
 		"mutatePod first multi-host Pod in subsequent multi-slice TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1412,7 +1426,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 1),
+			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 1),
 		},
 		"mutatePod subsequent multi-host Pod in subsequent multi-slice TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1429,7 +1443,7 @@ func Test_MutatePod(t *testing.T) {
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "test-cluster", utils.HeadlessServiceSuffix),
 				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "test-cluster", utils.HeadlessServiceSuffix),
 			}, ","),
-			expectedReplicaLabel: fmt.Sprintf("%s-%s-%s-%d", "test-namespace", "test-cluster", "test-group", 1),
+			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 1),
 		},
 	}
 
@@ -1477,7 +1491,7 @@ func Test_MutatePod(t *testing.T) {
 					expectedNamePatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_NAME", "value": tc.expectedWorkerName}})
 					expectedHostnamesPatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_WORKER_HOSTNAMES", "value": tc.expectedHostnames}})
 					assert.Equal(t, tc.expectedReplicaLabel, patches[0]["value"])
-					assert.Equal(t, fmt.Sprintf("test-group-%d-%s", tc.expectedReplicaID, tc.expectedWorkerID), patches[1]["value"])
+					assert.Equal(t, fmt.Sprintf("%s-%s", tc.expectedReplicaLabel, tc.expectedWorkerID), patches[1]["value"])
 					assert.Equal(t, fmt.Sprintf("%s-%s", "test-cluster", utils.HeadlessServiceSuffix), patches[3]["value"])
 					assert.Equal(t, expectedHostnamesPatch, patches[4]["value"])
 					assert.Equal(t, expectedIDPatch, patches[5]["value"])

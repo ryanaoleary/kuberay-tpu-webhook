@@ -292,7 +292,7 @@ func injectHostnames(clusterName string, hostNames string, envPath string, conta
 func injectReplicaLabel(clusterName string, namespace string, replicaIndex int, workerGroupName string, patches *[]patch) {
 	labelPatch := patch{"op": "replace"}
 	labelPath := "/metadata/labels/replicaIndex"
-	replicaLabelValue := fmt.Sprintf("%s-%s-%s-%d", namespace, clusterName, workerGroupName, replicaIndex)
+	replicaLabelValue := fmt.Sprintf("%s-%d", workerGroupName, replicaIndex)
 
 	klog.V(1).InfoS("injectReplicaLabel", "RayCluster", namespace+"/"+clusterName, "replicaIndex", replicaLabelValue)
 
@@ -304,19 +304,29 @@ func injectReplicaLabel(clusterName string, namespace string, replicaIndex int, 
 
 // injectPodAffinity injects pod affinity and anti-affinity scheduling constraints using replicaIndex label
 func injectPodAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, patches *[]patch) {
-	key := "replicaIndex"
 	clusterName := pod.Labels["ray.io/cluster"]
 	namespace := pod.Namespace
-	value := fmt.Sprintf("%s-%s-%s-%d", namespace, clusterName, workerGroupName, replicaIndex)
+	replicaIndexLabel := fmt.Sprintf("%s-%d", workerGroupName, replicaIndex)
 	topologyKey := "cloud.google.com/gke-nodepool"
 
-	klog.V(1).InfoS("injectPodAffinity", "RayCluster", namespace+"/"+clusterName, "podAffinity match label", value)
+	klog.V(1).InfoS("injectPodAffinity", "RayCluster", namespace+"/"+clusterName, "replicaIndex label", replicaIndexLabel)
+
+	// Label selector requirements to ensure unique replica indices per RayCluster are co-located.
+	replicaIndexReq := metav1.LabelSelectorRequirement{
+		Key:      "replicaIndex",
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   []string{replicaIndexLabel},
+	}
+	clusterNameReq := metav1.LabelSelectorRequirement{
+		Key:      "ray.io/cluster",
+		Operator: metav1.LabelSelectorOpIn,
+		Values:   []string{clusterName},
+	}
 
 	// construct affinity value to inject - schedule pods with the same replicaIndex together
 	podAffinityPatch := patch{"op": "add"}
 
-	affinitySelectorRequirement := metav1.LabelSelectorRequirement{Key: key, Operator: metav1.LabelSelectorOpIn, Values: []string{value}}
-	affinityMatchExpressions := []metav1.LabelSelectorRequirement{affinitySelectorRequirement}
+	affinityMatchExpressions := []metav1.LabelSelectorRequirement{replicaIndexReq, clusterNameReq}
 	affinityLabelSelector := metav1.LabelSelector{MatchExpressions: affinityMatchExpressions}
 	podAffinityTerms := []corev1.PodAffinityTerm{corev1.PodAffinityTerm{LabelSelector: &affinityLabelSelector, TopologyKey: topologyKey}}
 	podAffinity := corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: podAffinityTerms}
