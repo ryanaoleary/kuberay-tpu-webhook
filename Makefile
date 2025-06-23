@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets  
-IMG ?= us-central1-docker.pkg.dev/ryanaoleary-gke-dev/kuberay-tpu-webhook/kuberay-tpu-webhook:latest
+IMG ?= us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.3-gke.0
 
 # For europe, use europe-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook
   
