@@ -909,7 +909,7 @@ func Test_InjectReplicaLabel(t *testing.T) {
 	}
 }
 
-func Test_InjectPodAffinity(t *testing.T) {
+func Test_InjectAffinity(t *testing.T) {
 	tests := map[string]struct {
 		testPod              *corev1.Pod
 		replicaIndex         int
@@ -917,8 +917,7 @@ func Test_InjectPodAffinity(t *testing.T) {
 		expectedReplicaLabel string
 		expectedClusterLabel string
 	}{
-		"injectPodAffinity with replicaIndex label": {
-			// should create a patch to create a podAffinity for the replicaIndex label
+		"injectAffinity with replicaIndex and cluster labels": {
 			testPod:              getTestTPUWorker("test-cluster", "test-group", "test-namespace", "tpu-v4-podslice", "2x2x1", "4"),
 			replicaIndex:         0,
 			groupName:            "test-group-name",
@@ -927,32 +926,48 @@ func Test_InjectPodAffinity(t *testing.T) {
 		},
 	}
 
-	// validate that injectPodAffinity creates a patch adding a podAffinity label selector for replicaIndex
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			expectedPatches := []patch{}
-			injectPodAffinity(tc.testPod, tc.replicaIndex, tc.groupName, &expectedPatches)
-			patchValue := expectedPatches[0]["value"]
-			affinity := patchValue.(corev1.Affinity)
-			assert.Equal(t, "/spec/affinity", expectedPatches[0]["path"])
+			var patches []patch
 
-			affinityTerms := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
+			injectAffinity(tc.testPod, tc.replicaIndex, tc.groupName, &patches)
 
-			// Convert label selector match expressions to a map for easier test assertions
-			matchExprs := map[string]metav1.LabelSelectorRequirement{}
-			for _, expr := range affinityTerms.LabelSelector.MatchExpressions {
-				matchExprs[expr.Key] = expr
+			assert.Len(t, patches, 1)
+			assert.Equal(t, "/spec/affinity", patches[0]["path"])
+
+			affinity := patches[0]["value"].(corev1.Affinity)
+
+			// Validate PodAffinity is injected with expected label selectors
+			podAffinityTerms := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			podMatchExprs := map[string]metav1.LabelSelectorRequirement{}
+			for _, expr := range podAffinityTerms[0].LabelSelector.MatchExpressions {
+				podMatchExprs[expr.Key] = expr
 			}
+			assert.Equal(t, metav1.LabelSelectorOpIn, podMatchExprs["replicaIndex"].Operator)
+			assert.Equal(t, []string{tc.expectedReplicaLabel}, podMatchExprs["replicaIndex"].Values)
+			assert.Equal(t, metav1.LabelSelectorOpIn, podMatchExprs["ray.io/cluster"].Operator)
+			assert.Equal(t, []string{tc.expectedClusterLabel}, podMatchExprs["ray.io/cluster"].Values)
 
-			// Validate replicaIndex label selector
-			replicaExpr := matchExprs["replicaIndex"]
-			assert.Equal(t, metav1.LabelSelectorOpIn, replicaExpr.Operator)
-			assert.Equal(t, []string{tc.expectedReplicaLabel}, replicaExpr.Values)
+			// Validate PodAntiAffinity is injected with expected label selectors
+			podAntiAffinityTerms := affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			// Check anti-affinity for Pods of same cluster and different replicaIndex
+			term1MatchExprs := map[string]metav1.LabelSelectorRequirement{}
+			for _, expr := range podAntiAffinityTerms[0].LabelSelector.MatchExpressions {
+				term1MatchExprs[expr.Key] = expr
+			}
+			assert.Equal(t, metav1.LabelSelectorOpNotIn, term1MatchExprs["replicaIndex"].Operator)
+			assert.Equal(t, []string{tc.expectedReplicaLabel}, term1MatchExprs["replicaIndex"].Values)
+			assert.Equal(t, metav1.LabelSelectorOpIn, term1MatchExprs["ray.io/cluster"].Operator)
+			assert.Equal(t, []string{tc.expectedClusterLabel}, term1MatchExprs["ray.io/cluster"].Values)
 
-			// Validate ray.io/cluster label selector
-			clusterExpr := matchExprs["ray.io/cluster"]
-			assert.Equal(t, metav1.LabelSelectorOpIn, clusterExpr.Operator)
-			assert.Equal(t, []string{tc.expectedClusterLabel}, clusterExpr.Values)
+			// Check anti-affinity for Pods of different cluster when replicaIndex exists
+			term2MatchExprs := map[string]metav1.LabelSelectorRequirement{}
+			for _, expr := range podAntiAffinityTerms[1].LabelSelector.MatchExpressions {
+				term2MatchExprs[expr.Key] = expr
+			}
+			assert.Equal(t, metav1.LabelSelectorOpExists, term2MatchExprs["replicaIndex"].Operator)
+			assert.Equal(t, metav1.LabelSelectorOpNotIn, term2MatchExprs["ray.io/cluster"].Operator)
+			assert.Equal(t, []string{tc.expectedClusterLabel}, term2MatchExprs["ray.io/cluster"].Values)
 		})
 	}
 }
@@ -1490,8 +1505,69 @@ func Test_MutatePod(t *testing.T) {
 					expectedIDPatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_WORKER_ID", "value": tc.expectedWorkerID}})
 					expectedNamePatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_NAME", "value": tc.expectedWorkerName}})
 					expectedHostnamesPatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_WORKER_HOSTNAMES", "value": tc.expectedHostnames}})
+					expectedAffinityPatchValue := map[string]interface{}{
+						"podAffinity": map[string]interface{}{
+							"requiredDuringSchedulingIgnoredDuringExecution": []interface{}{
+								map[string]interface{}{
+									"labelSelector": map[string]interface{}{
+										"matchExpressions": []interface{}{
+											map[string]interface{}{
+												"key":      "replicaIndex",
+												"operator": "In",
+												"values":   []interface{}{tc.expectedReplicaLabel},
+											},
+											map[string]interface{}{
+												"key":      "ray.io/cluster",
+												"operator": "In",
+												"values":   []interface{}{"test-cluster"},
+											},
+										},
+									},
+									"topologyKey": "cloud.google.com/gke-nodepool",
+								},
+							},
+						},
+						"podAntiAffinity": map[string]interface{}{
+							"requiredDuringSchedulingIgnoredDuringExecution": []interface{}{
+								map[string]interface{}{
+									"labelSelector": map[string]interface{}{
+										"matchExpressions": []interface{}{
+											map[string]interface{}{
+												"key":      "replicaIndex",
+												"operator": "NotIn",
+												"values":   []interface{}{tc.expectedReplicaLabel},
+											},
+											map[string]interface{}{
+												"key":      "ray.io/cluster",
+												"operator": "In",
+												"values":   []interface{}{"test-cluster"},
+											},
+										},
+									},
+									"topologyKey": "cloud.google.com/gke-nodepool",
+								},
+								map[string]interface{}{
+									"labelSelector": map[string]interface{}{
+										"matchExpressions": []interface{}{
+											map[string]interface{}{
+												"key":      "ray.io/cluster",
+												"operator": "NotIn",
+												"values":   []interface{}{"test-cluster"},
+											},
+											map[string]interface{}{
+												"key":      "replicaIndex",
+												"operator": "Exists",
+											},
+										},
+									},
+									"topologyKey": "cloud.google.com/gke-nodepool",
+								},
+							},
+						},
+					}
 					assert.Equal(t, tc.expectedReplicaLabel, patches[0]["value"])
 					assert.Equal(t, fmt.Sprintf("%s-%s", tc.expectedReplicaLabel, tc.expectedWorkerID), patches[1]["value"])
+					assert.Equal(t, expectedAffinityPatchValue, patches[2]["value"])
 					assert.Equal(t, fmt.Sprintf("%s-%s", "test-cluster", utils.HeadlessServiceSuffix), patches[3]["value"])
 					assert.Equal(t, expectedHostnamesPatch, patches[4]["value"])
 					assert.Equal(t, expectedIDPatch, patches[5]["value"])

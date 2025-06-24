@@ -312,69 +312,61 @@ func makeLabelSelectorRequirement(key string, op metav1.LabelSelectorOperator, v
 	}
 }
 
-// injectPodAffinity injects pod affinity scheduling constraints using replicaIndex and cluster labels
+// injectAffinity injects pod affinity and anti-affinity scheduling constraints using replicaIndex and cluster labels
 // to ensure TPU Pods from the same multi-host replica are co-located.
-func injectPodAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, patches *[]patch) {
+func injectAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, patches *[]patch) {
 	clusterName := pod.Labels["ray.io/cluster"]
-	namespace := pod.Namespace
 	replicaIndexLabel := fmt.Sprintf("%s-%d", workerGroupName, replicaIndex)
 	topologyKey := "cloud.google.com/gke-nodepool"
 
-	klog.V(1).InfoS("injectPodAffinity", "RayCluster", namespace+"/"+clusterName, "replicaIndex label", replicaIndexLabel)
-
-	// Label selector requirements to ensure unique replica indices per RayCluster are co-located.
-	replicaIndexReq := makeLabelSelectorRequirement("replicaIndex", metav1.LabelSelectorOpIn, replicaIndexLabel)
-	clusterNameReq := makeLabelSelectorRequirement("ray.io/cluster", metav1.LabelSelectorOpIn, clusterName)
-
-	// Construct affinity value to inject - schedule pods with the same replicaIndex together
-	podAffinityPatch := patch{"op": "add"}
-
-	affinityMatchExpressions := []metav1.LabelSelectorRequirement{replicaIndexReq, clusterNameReq}
-	affinityLabelSelector := metav1.LabelSelector{MatchExpressions: affinityMatchExpressions}
-	podAffinityTerms := []corev1.PodAffinityTerm{corev1.PodAffinityTerm{LabelSelector: &affinityLabelSelector, TopologyKey: topologyKey}}
-	podAffinity := corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: podAffinityTerms}
-
-	if pod.Spec.Affinity != nil {
-		podAffinityPatch["path"] = "/spec/affinity/podAffinity"
-		podAffinityPatch["value"] = podAffinity
-	} else {
-		podAffinityPatch["path"] = "/spec/affinity"
-		podAffinityPatch["value"] = corev1.Affinity{PodAffinity: &podAffinity}
+	// Co-schedule on a node-pool Pods with the same replicaIndex and RayCluster label
+	replicaIndexIn := makeLabelSelectorRequirement("replicaIndex", metav1.LabelSelectorOpIn, replicaIndexLabel)
+	clusterIn := makeLabelSelectorRequirement("ray.io/cluster", metav1.LabelSelectorOpIn, clusterName)
+	podAffinity := corev1.PodAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{replicaIndexIn, clusterIn},
+			},
+			TopologyKey: topologyKey,
+		}},
+	}
+	// Avoid scheduling on a node-pool with Pods of a different RayCluster and ANY replicaIndex label
+	replicaIndexNotIn := makeLabelSelectorRequirement("replicaIndex", metav1.LabelSelectorOpNotIn, replicaIndexLabel)
+	clusterNotIn := makeLabelSelectorRequirement("ray.io/cluster", metav1.LabelSelectorOpNotIn, clusterName)
+	replicaIndexExists := makeLabelSelectorRequirement("replicaIndex", metav1.LabelSelectorOpExists)
+	podAntiAffinity := corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+			{
+				LabelSelector: &metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						replicaIndexNotIn,
+						clusterIn,
+					},
+				},
+				TopologyKey: topologyKey,
+			},
+			{
+				LabelSelector: &metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						clusterNotIn,
+						replicaIndexExists,
+					},
+				},
+				TopologyKey: topologyKey,
+			},
+		},
 	}
 
-	*patches = append(*patches, podAffinityPatch)
-}
-
-// injectPodAntiAffinity injects pod anti-affinity scheduling constraints using replicaIndex and cluster labels.
-// It prevents pods with different replicaIndex or ray.io/cluster from being co-scheduled on the same node pool.
-func injectPodAntiAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, patches *[]patch) {
-	clusterName := pod.Labels["ray.io/cluster"]
-	namespace := pod.Namespace
-	replicaIndexLabel := fmt.Sprintf("%s-%d", workerGroupName, replicaIndex)
-	topologyKey := "cloud.google.com/gke-nodepool"
-
-	klog.V(1).InfoS("injectPodAntiAffinity", "RayCluster", namespace+"/"+clusterName, "replicaIndex label", replicaIndexLabel)
-
-	// Construct anti-affinity value to inject - don't schedule pods on a nodepool with existing Pods carrying that
-	// label with different values
-	replicaIndexAntiReq := makeLabelSelectorRequirement("replicaIndex", metav1.LabelSelectorOpNotIn, replicaIndexLabel)
-	clusterNameAntiReq := makeLabelSelectorRequirement("ray.io/cluster", metav1.LabelSelectorOpNotIn, clusterName)
-
-	antiAffinityMatchExpressions := []metav1.LabelSelectorRequirement{replicaIndexAntiReq, clusterNameAntiReq}
-	antiAffinityLabelSelector := metav1.LabelSelector{MatchExpressions: antiAffinityMatchExpressions}
-	podAntiAffinityTerms := []corev1.PodAffinityTerm{corev1.PodAffinityTerm{LabelSelector: &antiAffinityLabelSelector, TopologyKey: topologyKey}}
-	podAntiAffinity := corev1.PodAntiAffinity{RequiredDuringSchedulingIgnoredDuringExecution: podAntiAffinityTerms}
-
-	podAntiAffinityPatch := patch{"op": "add"}
-	if pod.Spec.Affinity != nil {
-		podAntiAffinityPatch["path"] = "/spec/affinity/podAntiAffinity"
-		podAntiAffinityPatch["value"] = podAntiAffinity
-	} else {
-		podAntiAffinityPatch["path"] = "/spec/affinity"
-		podAntiAffinityPatch["value"] = corev1.Affinity{PodAntiAffinity: &podAntiAffinity}
+	combinedAffinity := corev1.Affinity{
+		PodAffinity:     &podAffinity,
+		PodAntiAffinity: &podAntiAffinity,
 	}
 
-	*patches = append(*patches, podAntiAffinityPatch)
+	*patches = append(*patches, patch{
+		"op":    "add",
+		"path":  "/spec/affinity",
+		"value": combinedAffinity,
+	})
 }
 
 // checkWorkersMatchTopology returns whether the # of Ray TPU worker pods equals the # of hosts defined in the topology key
@@ -716,8 +708,7 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 		patches = append(patches, hostnamePatch)
 
 		// inject pod affinity/anti-affinity for scheduling
-		injectPodAffinity(pod, replicaIndex, groupName, &patches)
-		injectPodAntiAffinity(pod, replicaIndex, groupName, &patches)
+		injectAffinity(pod, replicaIndex, groupName, &patches)
 	}
 
 	// inject all environment variables into the container requesting TPUs
