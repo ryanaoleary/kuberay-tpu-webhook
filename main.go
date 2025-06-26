@@ -343,8 +343,7 @@ func injectAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, p
 						clusterIn,
 					},
 				},
-				TopologyKey:       topologyKey,
-				NamespaceSelector: &metav1.LabelSelector{}, // Match all namespaces
+				TopologyKey: topologyKey,
 			},
 			{
 				LabelSelector: &metav1.LabelSelector{
