@@ -1545,7 +1545,7 @@ func Test_MutatePod(t *testing.T) {
 											},
 										},
 									},
-									"topologyKey":       "cloud.google.com/gke-nodepool",
+									"topologyKey": "cloud.google.com/gke-nodepool",
 								},
 								map[string]interface{}{
 									"labelSelector": map[string]interface{}{
@@ -1561,8 +1561,16 @@ func Test_MutatePod(t *testing.T) {
 											},
 										},
 									},
-									"topologyKey":       "cloud.google.com/gke-nodepool",
-									"namespaceSelector": map[string]interface{}{},
+									"topologyKey": "cloud.google.com/gke-nodepool",
+									"namespaceSelector": map[string]interface{}{
+										"matchExpressions": []interface{}{
+											map[string]interface{}{
+												"key":      "kubernetes.io/metadata.name",
+												"operator": "NotIn",
+												"values":   []interface{}{"kube-system"},
+											},
+										},
+									},
 								},
 							},
 						},

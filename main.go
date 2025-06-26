@@ -352,8 +352,16 @@ func injectAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, p
 						replicaIndexExists,
 					},
 				},
-				TopologyKey:       topologyKey,
-				NamespaceSelector: &metav1.LabelSelector{}, // Match all namespaces
+				TopologyKey: topologyKey,
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{
+						{
+							Key:      "kubernetes.io/metadata.name",
+							Operator: metav1.LabelSelectorOpNotIn,
+							Values:   []string{"kube-system"}, // match all except kube-system
+						},
+					},
+				},
 			},
 		},
 	}
