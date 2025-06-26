@@ -959,6 +959,7 @@ func Test_InjectAffinity(t *testing.T) {
 			assert.Equal(t, []string{tc.expectedReplicaLabel}, term1MatchExprs["replicaIndex"].Values)
 			assert.Equal(t, metav1.LabelSelectorOpIn, term1MatchExprs["ray.io/cluster"].Operator)
 			assert.Equal(t, []string{tc.expectedClusterLabel}, term1MatchExprs["ray.io/cluster"].Values)
+			assert.NotNil(t, podAntiAffinityTerms[0].NamespaceSelector)
 
 			// Check anti-affinity for Pods of different cluster when replicaIndex exists
 			term2MatchExprs := map[string]metav1.LabelSelectorRequirement{}
@@ -968,6 +969,7 @@ func Test_InjectAffinity(t *testing.T) {
 			assert.Equal(t, metav1.LabelSelectorOpExists, term2MatchExprs["replicaIndex"].Operator)
 			assert.Equal(t, metav1.LabelSelectorOpNotIn, term2MatchExprs["ray.io/cluster"].Operator)
 			assert.Equal(t, []string{tc.expectedClusterLabel}, term2MatchExprs["ray.io/cluster"].Values)
+			assert.NotNil(t, podAntiAffinityTerms[1].NamespaceSelector)
 		})
 	}
 }
@@ -1544,7 +1546,8 @@ func Test_MutatePod(t *testing.T) {
 											},
 										},
 									},
-									"topologyKey": "cloud.google.com/gke-nodepool",
+									"topologyKey":       "cloud.google.com/gke-nodepool",
+									"namespaceSelector": map[string]interface{}{},
 								},
 								map[string]interface{}{
 									"labelSelector": map[string]interface{}{
@@ -1560,7 +1563,8 @@ func Test_MutatePod(t *testing.T) {
 											},
 										},
 									},
-									"topologyKey": "cloud.google.com/gke-nodepool",
+									"topologyKey":       "cloud.google.com/gke-nodepool",
+									"namespaceSelector": map[string]interface{}{},
 								},
 							},
 						},

@@ -343,7 +343,8 @@ func injectAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, p
 						clusterIn,
 					},
 				},
-				TopologyKey: topologyKey,
+				TopologyKey:       topologyKey,
+				NamespaceSelector: &metav1.LabelSelector{}, // Match all namespaces
 			},
 			{
 				LabelSelector: &metav1.LabelSelector{
@@ -352,7 +353,8 @@ func injectAffinity(pod *corev1.Pod, replicaIndex int, workerGroupName string, p
 						replicaIndexExists,
 					},
 				},
-				TopologyKey: topologyKey,
+				TopologyKey:       topologyKey,
+				NamespaceSelector: &metav1.LabelSelector{}, // Match all namespaces
 			},
 		},
 	}
