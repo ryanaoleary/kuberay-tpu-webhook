@@ -7,8 +7,8 @@ tpuWebhook:
   
   image:
     repository: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook
-    tag: v1.2.3-gke.0
-    pullPolicy: Always
+    tag: v1.2.5-gke.0
+    pullPolicy: IfNotPresent
 
   deployment:
     replicas: 1
