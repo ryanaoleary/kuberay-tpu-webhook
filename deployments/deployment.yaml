@@ -64,8 +64,8 @@ spec:
     spec:
       serviceAccountName: kuberay-tpu-webhook
       containers:
-        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.3-gke.0
-          imagePullPolicy: Always
+        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.5-gke.0
+          imagePullPolicy: IfNotPresent
           name: kuberay-tpu-webhook
           args:
           - --v=0 # change this value to 1 for verbose logging
