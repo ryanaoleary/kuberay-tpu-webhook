@@ -463,16 +463,20 @@ func validateRayCluster(admissionReview *admissionv1.AdmissionReview) (*admissio
 	return admissionResponse, nil
 }
 
-// getEnvironmentVariable returns value associated with a given Container environment variable
-func getEnvironmentVariable(varName string, container corev1.Container) string {
+// getEnvironmentVariable returns value associated with a given Container environment variable and if it exists
+func getEnvironmentVariable(varName string, container corev1.Container) (string, bool) {
 	if container.Env != nil && len(container.Env) > 0 {
 		for _, envVar := range container.Env {
 			if envVar.Name == varName {
-				return envVar.Value
+				if envVar.Value != "" {
+					return envVar.Value, true
+				} else if envVar.ValueFrom != nil {
+					return "", true
+				}
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // getReplicaIndex returns the next lowest-index Pod Slice (worker group replica) to assign a Pod to in the RayCluster
@@ -581,7 +585,7 @@ func (t *TPUWebhookServer) getSliceToWorkerIDs(clusterName string, groupName str
 				continue
 			}
 
-			tpuWorkerIDEnvVar := getEnvironmentVariable("TPU_WORKER_ID", container)
+			tpuWorkerIDEnvVar, _ := getEnvironmentVariable("TPU_WORKER_ID", container)
 			tempVar, err := strconv.Atoi(tpuWorkerIDEnvVar)
 			if err != nil {
 				klog.ErrorS(err, "getSliceToWorkerIDs", "RayCluster", namespace+"/"+clusterName, "TPU_WORKER_ID", tpuWorkerIDEnvVar)
@@ -736,7 +740,7 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 				injectHostnames(clusterName, hostnames, path, container, &patches)
 			}
 			// inject TPU_WORKER_ID
-			if getEnvironmentVariable("TPU_WORKER_ID", container) == "" {
+			if value, _ := getEnvironmentVariable("TPU_WORKER_ID", container); value == "" {
 				klog.V(1).InfoS("mutatePod", "RayCluster", namespace+"/"+clusterName, "TPU_WORKER_ID", tpuWorkerID, "Replica Index", replicaIndex)
 				workerID := corev1.EnvVar{
 					Name:  "TPU_WORKER_ID",
@@ -754,7 +758,7 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 				patches = append(patches, idPatch)
 			}
 			// inject TPU_NAME
-			if getEnvironmentVariable("TPU_NAME", container) == "" {
+			if value, _ := getEnvironmentVariable("TPU_NAME", container); value == "" {
 				tpuNameValue := fmt.Sprintf("%s-%d", groupName, replicaIndex)
 				klog.V(1).InfoS("mutatePod", "RayCluster", namespace+"/"+clusterName, "TPU_NAME", tpuNameValue, "Replica Index", replicaIndex)
 				tpuName := corev1.EnvVar{
@@ -771,6 +775,49 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 					namePatch["value"] = tpuName
 				}
 				patches = append(patches, namePatch)
+			}
+
+			// inject TPU_DEVICE_PLUGIN_HOST_IP. This Env Var is required for TPU_DEVICE_PLUGIN_ADDR
+			if _, exists := getEnvironmentVariable("TPU_DEVICE_PLUGIN_HOST_IP", container); !exists {
+				klog.V(1).InfoS("mutatePod, add TPU_DEVICE_PLUGIN_HOST_IP", "RayCluster", namespace+"/"+clusterName)
+				tpuDevicePluginAddr := corev1.EnvVar{
+					Name: "TPU_DEVICE_PLUGIN_HOST_IP",
+					ValueFrom: &corev1.EnvVarSource{
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: "status.hostIP",
+						},
+					},
+				}
+				hostAddrPatch := patch{"op": "add"}
+				// create new EnvVar array if container.Env is empty, and append new envVars if not
+				if len(container.Env) == 0 {
+					hostAddrPatch["path"] = path
+					hostAddrPatch["value"] = []corev1.EnvVar{tpuDevicePluginAddr}
+				} else {
+					hostAddrPatch["path"] = fmt.Sprintf("%s/-", path)
+					hostAddrPatch["value"] = tpuDevicePluginAddr
+				}
+				patches = append(patches, hostAddrPatch)
+			}
+
+			// inject TPU_DEVICE_PLUGIN_ADDR
+			if value, _ := getEnvironmentVariable("TPU_DEVICE_PLUGIN_ADDR", container); value == "" {
+				tpuDevicePluginAddrValue := "$(TPU_DEVICE_PLUGIN_HOST_IP):2112"
+				klog.V(1).InfoS("mutatePod", "RayCluster", namespace+"/"+clusterName, "TPU_DEVICE_PLUGIN_ADDR", tpuDevicePluginAddrValue)
+				tpuDevicePluginAddr := corev1.EnvVar{
+					Name:  "TPU_DEVICE_PLUGIN_ADDR",
+					Value: tpuDevicePluginAddrValue,
+				}
+				pluginAddrPatch := patch{"op": "add"}
+				// create new EnvVar array if container.Env is empty, and append new EnvVars if not
+				if len(container.Env) == 0 {
+					pluginAddrPatch["path"] = path
+					pluginAddrPatch["value"] = []corev1.EnvVar{tpuDevicePluginAddr}
+				} else {
+					pluginAddrPatch["path"] = fmt.Sprintf("%s/-", path)
+					pluginAddrPatch["value"] = tpuDevicePluginAddr
+				}
+				patches = append(patches, pluginAddrPatch)
 			}
 		}
 	}
@@ -829,7 +876,7 @@ func (t *TPUWebhookServer) isLastAdmittedPod(pod *corev1.Pod) (bool, error) {
 			// Skip to the next container
 			continue
 		}
-		tpuWorkerID := getEnvironmentVariable("TPU_WORKER_ID", container)
+		tpuWorkerID, _ := getEnvironmentVariable("TPU_WORKER_ID", container)
 		if tpuWorkerID == "" {
 			// TPU pod was not intercepted by the webhook
 			return false, nil

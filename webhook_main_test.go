@@ -179,6 +179,18 @@ func getTestInterceptedTPUPods(templatePod *corev1.Pod, numPods int, numSlices i
 				Name:  "TPU_NAME",
 				Value: replicaIndex,
 			},
+			{
+				Name: "TPU_DEVICE_PLUGIN_HOST_IP",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{
+						FieldPath: "status.hostIP",
+					},
+				},
+			},
+			{
+				Name:  "TPU_DEVICE_PLUGIN_ADDR",
+				Value: "$(TPU_DEVICE_PLUGIN_HOST_IP):2112",
+			},
 		}
 		testTPUWorkerCopy.Spec.Containers[0].Env = env
 		testTPUWorkerCopy.Name = fmt.Sprintf("%s-%d", "intercepted-tpu-pod", i)
@@ -1190,12 +1202,17 @@ func Test_GetEnvironmentVariable(t *testing.T) {
 		Name:  "TPU_WORKER_HOSTNAMES",
 		Value: fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 0, "test-cluster", utils.HeadlessServiceSuffix),
 	}
-	podContainer.Env = []corev1.EnvVar{workerID, workerName, workerHostnames}
+	workerDevicePluginAddr := corev1.EnvVar{
+		Name:  "TPU_DEVICE_PLUGIN_ADDR",
+		Value: "$(TPU_DEVICE_PLUGIN_HOST_IP):2112",
+	}
+	podContainer.Env = []corev1.EnvVar{workerID, workerName, workerHostnames, workerDevicePluginAddr}
 
 	tests := map[string]struct {
-		variableName  string
-		container     *corev1.Container
-		expectedValue string
+		variableName       string
+		container          *corev1.Container
+		expectedValue      string
+		expectedValueExist bool
 	}{
 		"getEnvironmentVariable TPU_WORKER_ID": {
 			// returns TPU_WORKER_ID env var value
@@ -1215,13 +1232,28 @@ func Test_GetEnvironmentVariable(t *testing.T) {
 			container:     podContainer,
 			expectedValue: fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 0, 0, "test-cluster", utils.HeadlessServiceSuffix),
 		},
+		"getEnvironmentVariable TPU_DEVICE_PLUGIN_HOST_IP": {
+			// returns TPU_DEVICE_PLUGIN_HOST_IP env var check
+			variableName:       "TPU_DEVICE_PLUGIN_HOST_IP",
+			container:          podContainer,
+			expectedValue:      "",
+			expectedValueExist: false,
+		},
+		"getEnvironmentVariable TPU_DEVICE_PLUGIN_ADDR": {
+			variableName:  "TPU_DEVICE_PLUGIN_ADDR",
+			container:     podContainer,
+			expectedValue: "$(TPU_DEVICE_PLUGIN_HOST_IP):2112",
+		},
 	}
 
 	// validate getEnvironmentVariable returns correct env var value from Pod container
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			varValue := getEnvironmentVariable(tc.variableName, *tc.container)
+			varValue, exists := getEnvironmentVariable(tc.variableName, *tc.container)
 			assert.Equal(t, tc.expectedValue, varValue)
+			if tc.expectedValueExist {
+				assert.True(t, exists)
+			}
 		})
 	}
 }
@@ -1364,6 +1396,9 @@ func Test_MutatePod(t *testing.T) {
 		expectedHostnames    string
 		expectedReplicaLabel string
 		expectedError        error
+		// TPU device plugin addr
+		expectedDevicePluginHostAddr map[string]interface{}
+		expectedDevicePluginAddr     string
 	}{
 		"mutatePod missing cluster label": {
 			// missing Ray cluster label - returns error
@@ -1384,14 +1419,16 @@ func Test_MutatePod(t *testing.T) {
 		},
 		"mutatePod in single-host TPU worker group": {
 			// requests TPUs, single-host - injects TPU_WORKER_ID, TPU_NAME and replicaIndex label
-			testPod:              getTestTPUWorker("test-cluster", "test-group", "test-namespace", "tpu-v4-podslice", "2x2x1", "4"),
-			numOfHosts:           1,
-			existingPods:         0,
-			existingReplicas:     0,
-			expectedWorkerID:     "0",
-			expectedReplicaID:    0,
-			expectedWorkerName:   fmt.Sprintf("%s-%d", "test-group", 0),
-			expectedReplicaLabel: fmt.Sprintf("%s-%d", "test-group", 0),
+			testPod:                      getTestTPUWorker("test-cluster", "test-group", "test-namespace", "tpu-v4-podslice", "2x2x1", "4"),
+			numOfHosts:                   1,
+			existingPods:                 0,
+			existingReplicas:             0,
+			expectedWorkerID:             "0",
+			expectedReplicaID:            0,
+			expectedWorkerName:           fmt.Sprintf("%s-%d", "test-group", 0),
+			expectedReplicaLabel:         fmt.Sprintf("%s-%d", "test-group", 0),
+			expectedDevicePluginHostAddr: map[string]interface{}{"fieldRef": map[string]interface{}{"fieldPath": "status.hostIP"}},
+			expectedDevicePluginAddr:     "$(TPU_DEVICE_PLUGIN_HOST_IP):2112",
 		},
 		"mutatePod first Pod in multi-host TPU worker group": {
 			// requests TPUs, multi-host - injects hostname, subdomain, TPU_WORKER_ID, TPU_NAME,
@@ -1496,9 +1533,16 @@ func Test_MutatePod(t *testing.T) {
 					workerName := patches[2]
 					expectedIDPatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_WORKER_ID", "value": tc.expectedWorkerID}})
 					expectedNamePatch := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_NAME", "value": tc.expectedWorkerName}})
+					// TPU device plugin addr
+					workerDevicePluginHostAddr := patches[3]
+					expectedDevicePluginHostAddr := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_DEVICE_PLUGIN_HOST_IP", "valueFrom": tc.expectedDevicePluginHostAddr}})
+					workerDevicePluginAddr := patches[4]
+					expectedDevicePluginAddr := []interface{}([]interface{}{map[string]interface{}{"name": "TPU_DEVICE_PLUGIN_ADDR", "value": tc.expectedDevicePluginAddr}})
 					assert.Equal(t, tc.expectedReplicaLabel, patches[0]["value"])
 					assert.Equal(t, expectedIDPatch, workerID["value"])
 					assert.Equal(t, expectedNamePatch, workerName["value"])
+					assert.Equal(t, expectedDevicePluginHostAddr, workerDevicePluginHostAddr["value"])
+					assert.Equal(t, expectedDevicePluginAddr, workerDevicePluginAddr["value"])
 				}
 				if tc.numOfHosts > 1 {
 					// multi-host - patches should add replicaIndex, hostname, podAffinity, subdomain,
