@@ -812,11 +812,11 @@ func Test_GenDNSHostnames(t *testing.T) {
 		},
 		"genDNSHostnames with long RayCluster name": {
 			// Multi-host worker group in a RayCluster with a name that will be truncated
-			clusterName:  "long-raycluster-name-to-be-truncated",
+			clusterName:  "extremely-long-raycluster-name-to-be-truncated",
 			replicaIndex: 1,
 			numOfHosts:   int32(2),
-			expectedHostnames: strings.Join([]string{fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 0, "aycluster-name-to-be-truncated", utils.HeadlessServiceSuffix),
-				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 1, "aycluster-name-to-be-truncated", utils.HeadlessServiceSuffix),
+			expectedHostnames: strings.Join([]string{fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 0, "mely-long-raycluster-name-to-be-truncated", utils.HeadlessServiceSuffix),
+				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 1, "mely-long-raycluster-name-to-be-truncated", utils.HeadlessServiceSuffix),
 			}, ","),
 		},
 	}
@@ -856,13 +856,13 @@ func Test_InjectHostnames(t *testing.T) {
 		"injectHostnames for multi-host worker group with truncated service name": {
 			// Should create a patch to set the subdomain and TPU_WORKER_HOSTNAMES for all hosts, with the
 			// correct subdomain truncated to match the created service name.
-			clusterName:       "extremely-long-test-raycluster-name",
+			clusterName:       "really-really-extremely-long-test-raycluster-name",
 			groupName:         "test-group-name",
-			expectedSubdomain: fmt.Sprintf("%s-%s", "mely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
-			expectedHostnames: strings.Join([]string{fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 0, "mely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
-				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 1, "mely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
-				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "mely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
-				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "mely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
+			expectedSubdomain: fmt.Sprintf("%s-%s", "eally-extremely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
+			expectedHostnames: strings.Join([]string{fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 0, "eally-extremely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
+				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 1, "eally-extremely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
+				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 2, "eally-extremely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
+				fmt.Sprintf("%s-%d-%d.%s-%s", "test-group", 1, 3, "eally-extremely-long-test-raycluster-name", utils.HeadlessServiceSuffix),
 			}, ","),
 		},
 	}
