@@ -3,6 +3,8 @@
 ## Overview
 The Shipshape Validation Service validates Kubernetes YAML configurations against predefined security policies. This ensures compliance and enhances the security of Kubernetes deployments.
 
+The primary policies being checked against in the `kuberay-tpu-webhook` repository relate to the `deployments` and `helm-chart` that define Kubernetes resources to deploy on a cluster. The KubeRay TPU webhook creates a K8s Namespace, Service Account, ClusterRole, Deployment, MutatingWebhookConfiguration, ValidatingWebhookConfiguration, and finally a `ClusterIP` Service. The Shipshape Validation Service analyzes these manifests to ensure they do not introduce security vulnerabilities, such as granting excessive RBAC permissions or configuring the webhook Pod with insecure container capabilities that could expose the cluster.
+
 If your e2e test fails due to a policy violation detected by Shipshape, you have two options:
 1. **Fix the Code**: Resolve the violation by modifying the code to comply with the specified policy. You may consult the GKE Hardening team for guidance.
 2. **Add to Allowlist**: If the violation is a known exception, you can add it to the allowlist to prevent it from blocking your build.
