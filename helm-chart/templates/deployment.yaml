@@ -65,6 +65,17 @@ spec:
       serviceAccountName: kuberay-tpu-webhook
       containers:
         - image: "{{ .Values.tpuWebhook.image.repository }}:{{ .Values.tpuWebhook.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+              add:
+              - "NET_BIND_SERVICE"
+            readOnlyRootFilesystem: true
+            runAsUser: 2007
+            seccompProfile:
+              type: RuntimeDefault
           imagePullPolicy: {{ .Values.tpuWebhook.image.pullPolicy }}
           name: {{ .Chart.Name }}
           args:
