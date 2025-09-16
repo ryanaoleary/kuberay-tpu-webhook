@@ -64,7 +64,18 @@ spec:
     spec:
       serviceAccountName: kuberay-tpu-webhook
       containers:
-        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.5-gke.1
+        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/v1.2.5-gke.1@sha256:e2c6cfa375ad75eb08aa32ef5136c1500bc7def5a8ee252b16f6b3c681f5b6b6
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+              add:
+              - "NET_BIND_SERVICE"
+            readOnlyRootFilesystem: true
+            runAsUser: 2007
+            seccompProfile:
+              type: RuntimeDefault
           imagePullPolicy: IfNotPresent
           name: kuberay-tpu-webhook
           args:
