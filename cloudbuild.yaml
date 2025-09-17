@@ -13,9 +13,12 @@
 # limitations under the License.
 
 steps:
+  - id: 'go mod download'
+    name: 'golang:1.24.2'
+    entrypoint: 'go'
+    args: ['mod', 'download']
   - id: 'kuberay tpu webhook fmt'
-    name: 'golang:1.21.11'
-    dir: /workspace/ray-on-gke/tpu/kuberay-tpu-webhook
+    name: 'golang:1.24.2'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -23,8 +26,7 @@ steps:
         set -e
         make fmt
   - id: 'kuberay tpu webhook vet'
-    name: 'golang:1.21.11'
-    dir: /workspace/ray-on-gke/tpu/kuberay-tpu-webhook
+    name: 'golang:1.24.2'
     entrypoint: 'bash'
     args:
       - '-c'
@@ -32,14 +34,67 @@ steps:
         set -e
         make vet
   - id: 'kuberay tpu webhook test'
-    name: 'golang:1.21.11'
-    dir: /workspace/ray-on-gke/tpu/kuberay-tpu-webhook
+    name: 'golang:1.24.2'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
         set -e
         make test
+  - id: 'Copy metadata'
+    name: 'ubuntu'
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - |
+      mkdir -p security_test/scan_target/ && find . -mindepth 1 -maxdepth 1 -type d ! -name "security_test" -exec cp -r {} security_test/scan_target/ \;
+      mkdir -p /workspace/security_test/scan_target
+      # Exclude /workspace/security_test from the copy to avoid recursive issue
+      find . -mindepth 1 -maxdepth 1 ! -path "./security_test" -exec cp -r {} /workspace/security_test/scan_target/ \;
+      chown -R 65532:65532 /workspace/security_test/scan_target
+      mkdir -p /workspace/security_test/allowlist
+      cp -r security_test/allowlist/* /workspace/security_test/allowlist/ || echo "Allowlist folder is empty or not found"
+    allowFailure: true
+
+  - id: 'Run Shipshape on helm'
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - |
+      docker run \
+      --network=cloudbuild \
+      --rm \
+      -v /workspace/security_test/allowlist:/workspace/security_test/allowlist \
+      -v /workspace/security_test/scan_target:/workspace/security_test/scan_target \
+      ${_SHIPSHAPE_IMAGE} \
+      --mode=helm \
+      --allowlist_folder=/workspace/security_test/allowlist \
+      --scan_path=/workspace/security_test/scan_target \
+      --max_wait_duration=60 \
+      2>&1 | tee /workspace/shipshape_on_helm.txt 2>&1
+    allowFailure: true
+    waitFor: ['Copy metadata']
+
+  - id: 'check result'
+    name: "ubuntu"
+    entrypoint: 'bash'
+    args:
+    - '-c'
+    - |
+      if grep -q "Validation failed" /workspace/shipshape_on_helm.txt; then
+        echo "Shipshape on helm scan validation failed, please check the log. knowledge share slides: go/shipshape-ai-on-gke-slide"
+        exit 1
+      fi
+    waitFor: ['Run Shipshape on helm']
+substitutions:
+  _REGION: us-east4
+  _USER_NAME: github
+  _AUTOPILOT_CLUSTER: "false"
+  _BUILD_ID: ${BUILD_ID:0:8}
+  _SHIPSHAPE_IMAGE: us-docker.pkg.dev/k8ssecurityvalidation-agent/k8ssecurityvalidation-agent/k8ssecurityvalidation-agent@sha256:cd45e6cd84e9a45462ddbca18c4731fd4e264d517ee98131eb5be4eb57691f44
 options:
-  machineType: 'E2_HIGHCPU_8'
-timeout: 600s
+  logging: CLOUD_LOGGING_ONLY
+  substitutionOption: "ALLOW_LOOSE"
+  machineType: "E2_HIGHCPU_8"
+timeout: 5400s

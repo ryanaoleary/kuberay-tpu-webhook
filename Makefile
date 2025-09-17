@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets  
-IMG ?= us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.5-gke.0
+IMG ?= us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.5-gke.1
 
 # For europe, use europe-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook
   
@@ -52,4 +52,3 @@ deploy-cert:
 
 uninstall-cert:
 	kubectl delete -f certs/
-
