@@ -27,7 +27,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -793,13 +792,64 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 	return admissionResponse, nil
 }
 
-func writeCertfile(filename string, encodedData string) error {
-	data, err := base64.StdEncoding.DecodeString(encodedData)
-	if err != nil {
-		return err
+// buildTLSConfig builds a TLS config for the webhook server.
+// It supports two modes:
+//  1. Using cert-watcher with a context and file paths specified by CertFile and KeyFile flags.
+//  2. Using static certificates, either from the ServerCert and ServerKey base64-encoded flags,
+//     or by reading directly from the default certPath and keyPath.
+func buildTLSConfig(ctx context.Context) (*tls.Config, error) {
+	if CertFile != "" && KeyFile != "" {
+		klog.Infof("Using cert-watcher for TLS. CertFile: %s, KeyFile: %s", CertFile, KeyFile)
+		cw, err := certwatcher.New(CertFile, KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize cert watcher: %w", err)
+		}
+
+		go func() {
+			klog.V(1).Info("Starting certificate watcher...")
+			if err := cw.Start(ctx); err != nil {
+				klog.Errorf("certificate watcher error: %v", err)
+			}
+		}()
+
+		return &tls.Config{
+			GetCertificate: cw.GetCertificate,
+		}, nil
 	}
-	_ = os.MkdirAll(filepath.Dir(filename), 0755)
-	return os.WriteFile(filename, data, 0644)
+
+	var certPEM, keyPEM []byte
+	var err error
+
+	if ServerCert != "" && ServerKey != "" {
+		klog.Infof("Using base64-encoded flags for TLS.")
+		certPEM, err = base64.StdEncoding.DecodeString(ServerCert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode server cert: %w", err)
+		}
+		keyPEM, err = base64.StdEncoding.DecodeString(ServerKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode server key: %w", err)
+		}
+	} else {
+		klog.Infof("Using certificate files for TLS. CertPath: %s, KeyPath: %s", certPath, keyPath)
+		certPEM, err = os.ReadFile(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read server cert file %s: %w", certPath, err)
+		}
+		keyPEM, err = os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read server key file %s: %w", keyPath, err)
+		}
+	}
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create x509 key pair: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}, nil
 }
 
 func init() {
@@ -889,63 +939,30 @@ func startServer(tpuWebhookServer *TPUWebhookServer) error {
 	mux.HandleFunc("/mutate", tpuWebhookServer.Mutate)
 	mux.HandleFunc("/validate", tpuWebhookServer.Validate)
 
-	// The server can be configured in two ways for TLS:
-	// 1. Using CertFile and KeyFile flags, which enables cert-watcher.
-	// 2. Using static ServerCert and ServerKey flags.
-	if CertFile != "" && KeyFile != "" {
-		klog.Infof("Starting server with cert-watcher. CertFile: %s, KeyFile: %s", CertFile, KeyFile)
-		cw, err := certwatcher.New(CertFile, KeyFile)
-		if err != nil {
-			return fmt.Errorf("failed to initialize cert watcher: %w", err)
-		}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		go func() {
-			klog.V(1).Info("Starting certificate watcher...")
-			if err := cw.Start(ctx); err != nil {
-				klog.Errorf("certificate watcher error: %v", err)
-			}
-		}()
-
-		srv := &http.Server{
-			Addr:    BindAddr,
-			Handler: mux,
-			TLSConfig: &tls.Config{
-				GetCertificate: cw.GetCertificate,
-			},
-		}
-		klog.Infof("HTTPS server listening on %s", BindAddr)
-		// Empty file paths will use GetCertificate from TLSConfig.
-		return srv.ListenAndServeTLS("", "")
-	}
-
-	// Fallback to default cert path.
-	klog.V(1).Infof("Starting server with certs from static path. CertPath: %s, KeyPath: %s", certPath, keyPath)
-	if ServerCert != "" && ServerKey != "" {
-		if err := writeCertfile(certPath, ServerCert); err != nil {
-			return fmt.Errorf("failed to write server cert: %w", err)
-		}
-		if err := writeCertfile(keyPath, ServerKey); err != nil {
-			return fmt.Errorf("failed to write server key: %w", err)
-		}
+	tlsConfig, err := buildTLSConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to build TLS config: %w", err)
 	}
 
 	srv := &http.Server{
-		Addr:    BindAddr,
-		Handler: mux,
+		Addr:      BindAddr,
+		Handler:   mux,
+		TLSConfig: tlsConfig,
 	}
-	klog.V(1).Infof("Server listening on %s", BindAddr)
-	return srv.ListenAndServeTLS(certPath, keyPath)
+
+	klog.Infof("HTTPS server listening on %s", BindAddr)
+	return srv.ListenAndServeTLS("", "")
 }
 
 func main() {
 	flag.Parse()
 
 	// Validate that only one set of cert flags are  used together.
-	serverCertFlagsSet := ServerCert != "" && ServerKey != ""
-	certFileFlagsSet := CertFile != "" && KeyFile != ""
+	serverCertFlagsSet := ServerCert != "" || ServerKey != ""
+	certFileFlagsSet := CertFile != "" || KeyFile != ""
 	if serverCertFlagsSet && certFileFlagsSet {
 		klog.Fatal("Configuration error: both TLS base64 and path flags defined at the same time.")
 	}
