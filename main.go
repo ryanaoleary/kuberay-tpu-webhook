@@ -17,6 +17,8 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,7 +27,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 )
 
 // slice represents a TPU Pod Slice.
@@ -76,10 +78,12 @@ var (
 
 	// Flag arguments.
 	BindAddr       string
-	CACert         string
 	KubeConfigPath string
 	ServerCert     string
 	ServerKey      string
+
+	CertFile string
+	KeyFile  string
 )
 
 func NewTPUWebhookServer(podLister listersv1.PodLister) *TPUWebhookServer {
@@ -105,7 +109,7 @@ func (t *TPUWebhookServer) Mutate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	klog.V(0).InfoS("Mutate", "Received review for Pod creation: %s", admissionReview.Request.Name)
+	klog.V(0).InfoS("Mutate", "Received review for Pod creation with name", admissionReview.Request.Name)
 	response, err := t.mutatePod(admissionReview)
 	if err != nil {
 		klog.Errorf("Failed to mutate Pod: %s", err)
@@ -138,7 +142,7 @@ func (t *TPUWebhookServer) Validate(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	klog.V(0).InfoS("Validate", "Received review for RayCluster creation: %s", admissionReview.Request.Name)
+	klog.V(0).InfoS("Validate", "Received review for RayCluster creation with name", admissionReview.Request.Name)
 	response, err := validateRayCluster(admissionReview)
 	if err != nil {
 		klog.Errorf("Failed to validate RayCluster: %s", err)
@@ -835,21 +839,73 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 	return admissionResponse, nil
 }
 
-func writeCertfile(filename string, encodedData string) error {
-	data, err := base64.StdEncoding.DecodeString(encodedData)
-	if err != nil {
-		return err
+// buildTLSConfig builds a TLS config for the webhook server.
+// It supports two modes:
+//  1. Using cert-watcher with a context and file paths specified by CertFile and KeyFile flags.
+//  2. Using static certificates, either from the ServerCert and ServerKey base64-encoded flags,
+//     or by reading directly from the default certPath and keyPath.
+func buildTLSConfig(ctx context.Context) (*tls.Config, error) {
+	if CertFile != "" && KeyFile != "" {
+		klog.Infof("Using cert-watcher for TLS. CertFile: %s, KeyFile: %s", CertFile, KeyFile)
+		cw, err := certwatcher.New(CertFile, KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize cert watcher: %w", err)
+		}
+
+		go func() {
+			klog.V(1).Info("Starting certificate watcher...")
+			if err := cw.Start(ctx); err != nil {
+				klog.Errorf("certificate watcher error: %v", err)
+			}
+		}()
+
+		return &tls.Config{
+			GetCertificate: cw.GetCertificate,
+		}, nil
 	}
-	_ = os.MkdirAll(filepath.Dir(filename), 0755)
-	return os.WriteFile(filename, data, 0644)
+
+	var certPEM, keyPEM []byte
+	var err error
+
+	if ServerCert != "" && ServerKey != "" {
+		klog.Infof("Using base64-encoded flags for TLS.")
+		certPEM, err = base64.StdEncoding.DecodeString(ServerCert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode server cert: %w", err)
+		}
+		keyPEM, err = base64.StdEncoding.DecodeString(ServerKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode server key: %w", err)
+		}
+	} else {
+		klog.Infof("Using certificate files for TLS. CertPath: %s, KeyPath: %s", certPath, keyPath)
+		certPEM, err = os.ReadFile(certPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read server cert file %s: %w", certPath, err)
+		}
+		keyPEM, err = os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read server key file %s: %w", keyPath, err)
+		}
+	}
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create x509 key pair: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}, nil
 }
 
 func init() {
 	flag.StringVar(&BindAddr, "bind-address", ":443", "Address to bind HTTPS service to")
-	flag.StringVar(&CACert, "ca-cert", "", "base64-encoded root certificate for TLS")
+	flag.StringVar(&KubeConfigPath, "kube-config-path", "", "Kubernetes config path for k8s client")
 	flag.StringVar(&ServerCert, "server-cert", "", "base64-encoded server certificate for TLS")
 	flag.StringVar(&ServerKey, "server-key", "", "base64-encoded server key for TLS")
-	flag.StringVar(&KubeConfigPath, "kube-config-path", "", "Kubernetes config path for k8s client")
+	flag.StringVar(&CertFile, "tls-cert-file", "", "File containing the x509 Certificate for HTTPS")
+	flag.StringVar(&KeyFile, "tls-private-key-file", "", "File containing the x509 private key matching --tls-cert-file.")
 
 	// set klog verbosity level
 	klog.InitFlags(nil)
@@ -920,8 +976,43 @@ func (t *TPUWebhookServer) addPod(obj interface{}) {
 	}
 }
 
+// startServer sets up and runs the webhook's HTTP server.
+func startServer(tpuWebhookServer *TPUWebhookServer) error {
+	klog.V(0).Info("Starting KubeRay TPU webhook server...")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "kuberay-tpu-webhook")
+	})
+	mux.HandleFunc("/mutate", tpuWebhookServer.Mutate)
+	mux.HandleFunc("/validate", tpuWebhookServer.Validate)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tlsConfig, err := buildTLSConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to build TLS config: %w", err)
+	}
+
+	srv := &http.Server{
+		Addr:      BindAddr,
+		Handler:   mux,
+		TLSConfig: tlsConfig,
+	}
+
+	klog.Infof("HTTPS server listening on %s", BindAddr)
+	return srv.ListenAndServeTLS("", "")
+}
+
 func main() {
 	flag.Parse()
+
+	// Validate that only one set of cert flags are  used together.
+	serverCertFlagsSet := ServerCert != "" || ServerKey != ""
+	certFileFlagsSet := CertFile != "" || KeyFile != ""
+	if serverCertFlagsSet && certFileFlagsSet {
+		klog.Fatal("Configuration error: both TLS base64 and path flags defined at the same time.")
+	}
 
 	// use in-cluster config if kubeConfig path is not passed as a flag
 	var client *kubernetes.Clientset
@@ -973,35 +1064,9 @@ func main() {
 		},
 	)
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "kuberay-tpu-webhook")
-	})
-
-	mux.HandleFunc("/mutate", tpuWebhookServer.Mutate)
-
-	mux.HandleFunc("/validate", tpuWebhookServer.Validate)
-
-	srv := &http.Server{
-		Addr:    BindAddr,
-		Handler: mux,
+	// Start the webhook server.
+	if err := startServer(tpuWebhookServer); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		klog.Fatalf("Failed to start server: %v", err)
 	}
-
-	if ServerCert != "" && ServerKey != "" {
-		if err := writeCertfile(certPath, ServerCert); err != nil {
-			klog.Fatalf("write server cert: %v", err)
-		}
-		if err := writeCertfile(keyPath, ServerKey); err != nil {
-			klog.Fatalf("write server key: %v", err)
-		}
-	}
-
-	if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil {
-		if err == http.ErrServerClosed {
-			klog.V(0).Info("Server closed")
-			return
-		}
-		klog.Error("Failed to start server")
-	}
+	klog.V(0).Info("Server closed")
 }
