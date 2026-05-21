@@ -61,11 +61,9 @@ type slice struct {
 // TPUWebhookServer is a KubeRay TPU webhook server instance.
 type TPUWebhookServer struct {
 	// podLister is used to query Pods from an informer cache.
-	podLister    listersv1.PodLister
-	cacheMutex   sync.Mutex
-	wg           sync.WaitGroup
-	waiting      int
-	lastAdmitted string
+	podLister  listersv1.PodLister
+	cacheMutex sync.Mutex
+	cacheCond  *podSyncCond
 }
 
 // patch is a JSON patch describing mutate operation(s) for an incoming object.
@@ -99,14 +97,12 @@ var (
 func NewTPUWebhookServer(podLister listersv1.PodLister) *TPUWebhookServer {
 	return &TPUWebhookServer{
 		podLister: podLister,
+		cacheCond: newPodSyncCond(),
 	}
 }
 
 // Mutate handles http Request for Pod creation and writes a response
 func (t *TPUWebhookServer) Mutate(w http.ResponseWriter, r *http.Request) {
-	t.cacheMutex.Lock()
-	defer t.cacheMutex.Unlock()
-
 	admissionReview := &admissionv1.AdmissionReview{}
 	if err := json.NewDecoder(r.Body).Decode(admissionReview); err != nil {
 		http.Error(w, "Error decoding request body", http.StatusBadRequest)
@@ -697,21 +693,6 @@ func extractPod(admissionReview *admissionv1.AdmissionReview) (*corev1.Pod, erro
 	return &pod, nil
 }
 
-// waitTimeout helper function to sync.WaitGroup Wait() or timeout
-func waitTimeout(wait *sync.WaitGroup, timeout time.Duration) bool {
-	waitChan := make(chan struct{})
-	go func() {
-		defer close(waitChan)
-		wait.Wait()
-	}()
-	select {
-	case <-waitChan:
-		return true // Wait() returned
-	case <-time.After(timeout):
-		return false // Request timed out
-	}
-}
-
 // addEnvVarPatch is a helper to create a JSON patch to add an environment variable to a container.
 // It returns the updated patch slice and a boolean indicating that the env array now exists.
 func addEnvVarPatch(patches []patch, envVar corev1.EnvVar, path string, envArrayExists bool) ([]patch, bool) {
@@ -811,34 +792,10 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 		}
 	} else {
 		// Fallback for older KubeRay versions that do not set K8s index labels.
-		// Wait for PodInformer cache to update from previous requests or timeout.
-		if waitTimeout(&t.wg, time.Second*1) {
-			klog.V(1).Info("MutatePod", "PodInformer AddFunc called for prior admission request")
-		} else {
-			klog.V(1).Info("MutatePod", "Timed out waiting for PodInformer AddFunc")
-		}
-		// Add 1 to the WaitGroup to represent the pending Pod to the cache
-		defer t.wg.Add(1)
-		t.waiting += 1
-
-		// query k8s client to populate sliceToTPUHosts
-		sliceToTPUHosts, err := t.getSliceToTPUHosts(clusterName, groupName, namespace, numOfHosts)
+		replicaIndex, tpuWorkerID, err = t.legacyAssignIndices(pod, clusterName, groupName, namespace, numOfHosts, &patches)
 		if err != nil {
 			return nil, err
 		}
-
-		replicaIndex = getReplicaIndex(sliceToTPUHosts, clusterName, groupName, namespace)
-		podSlice := slice{clusterName, groupName, namespace, replicaIndex, numOfHosts}
-		tpuWorkerID, err = getNextWorkerID(sliceToTPUHosts, podSlice, namespace, replicaIndex)
-		if err != nil {
-			return nil, err
-		}
-
-		// Update state for next request
-		t.lastAdmitted = fmt.Sprintf("%s-%s-%s-%d-%d", namespace, clusterName, groupName, replicaIndex, tpuWorkerID)
-
-		// Manually inject the replicaIndex label
-		injectReplicaLabel(clusterName, namespace, replicaIndex, groupName, &patches)
 	}
 
 	headlessServiceName := generateHeadlessServiceName(clusterName)
@@ -1004,6 +961,39 @@ func (t *TPUWebhookServer) mutatePod(admissionReview *admissionv1.AdmissionRevie
 	return admissionResponse, nil
 }
 
+// legacyAssignIndices assigns replicaIndex and tpuWorkerID for older KubeRay versions.
+func (t *TPUWebhookServer) legacyAssignIndices(pod *corev1.Pod, clusterName, groupName, namespace string, numOfHosts int32, patches *[]patch) (int, int, error) {
+	t.cacheMutex.Lock()
+	defer t.cacheMutex.Unlock()
+
+	// Wait for PodInformer cache to update from previous requests.
+	timedOut := t.cacheCond.Wait(1 * time.Second)
+	if timedOut {
+		klog.V(0).Infof("Mutating pod %s with a stale cache", pod.GetName())
+	}
+
+	// Query k8s client to populate sliceToTPUHosts.
+	sliceToTPUHosts, err := t.getSliceToTPUHosts(clusterName, groupName, namespace, numOfHosts)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	replicaIndex := getReplicaIndex(sliceToTPUHosts, clusterName, groupName, namespace)
+	podSlice := slice{clusterName, groupName, namespace, replicaIndex, numOfHosts}
+	tpuWorkerID, err := getNextWorkerID(sliceToTPUHosts, podSlice, namespace, replicaIndex)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// Update state for next request.
+	t.cacheCond.Admit(fmt.Sprintf("%s-%s-%s-%d-%d", namespace, clusterName, groupName, replicaIndex, tpuWorkerID))
+
+	// Manually inject the replicaIndex label
+	injectReplicaLabel(clusterName, namespace, replicaIndex, groupName, patches)
+
+	return replicaIndex, tpuWorkerID, nil
+}
+
 // buildTLSConfig builds a TLS config for the webhook server.
 // It supports two modes:
 //  1. Using cert-watcher with a context and file paths specified by CertFile and KeyFile flags.
@@ -1076,15 +1066,23 @@ func init() {
 	klog.InitFlags(nil)
 }
 
-// isLastAdmittedPod returns True if Pod matches the last Pod admitted by the webhook server
+// addPod allows next goroutine to start once the webhook PodInformer cache updates
+func (t *TPUWebhookServer) addPod(obj interface{}) {
+	pod := obj.(*corev1.Pod)
+	klog.V(1).InfoS("addPod", "Pod", pod.Namespace+"/"+pod.Name, "Time", time.Now())
+	if _, err := t.isLastAdmittedPod(pod); err != nil {
+		klog.V(0).ErrorS(err, "Failed to verify local cache from pod informer update", "name", pod.GetName())
+	}
+}
+
 func (t *TPUWebhookServer) isLastAdmittedPod(pod *corev1.Pod) (bool, error) {
 	if pod.Spec.Containers == nil || !containerRequestingTPUs(pod.Spec.Containers...) {
-		// Pod does not use TPUs
+		// Pod does not use TPUs.
 		return false, nil
 	}
 	replicaIndex := pod.Labels[legacyReplicaIndexLabelKey]
 	if replicaIndex == "" {
-		// Pod was not mutated by the webhook
+		// Pod was not mutated by the webhook.
 		return false, nil
 	}
 	clusterName := pod.Labels[utils.RayClusterLabelKey]
@@ -1094,51 +1092,115 @@ func (t *TPUWebhookServer) isLastAdmittedPod(pod *corev1.Pod) (bool, error) {
 	namespace := pod.Namespace
 	for _, container := range pod.Spec.Containers {
 		if !containerRequestingTPUs(container) {
-			// Skip to the next container
+			// Skip to the next container.
 			continue
 		}
 		tpuWorkerID, _ := getEnvironmentVariable("TPU_WORKER_ID", container)
 		if tpuWorkerID == "" {
-			// TPU pod was not intercepted by the webhook
-			return false, nil
+			// TPU pod container was not intercepted by the webhook.
+			continue
 		}
+
+		// The pod has a TPU-configured container. Inform the cache control
+		// mechanism of the pod id. It's sufficient return after inspecting the
+		// first TPU container (there can be no second TPU container with a
+		// different id).
 		uniquePodID := fmt.Sprintf("%s-%s-%s-%s", namespace, clusterName, replicaIndex, tpuWorkerID)
-		if uniquePodID == t.lastAdmitted {
-			// Pod matches the last TPU worker Pod intercepted by the webhook server
-			return true, nil
-		}
+		return t.cacheCond.Signal(uniquePodID), nil
 	}
 	return false, nil
 }
 
-// addPod allows next goroutine to start once the webhook PodInformer cache updates
-func (t *TPUWebhookServer) addPod(obj interface{}) {
-	pod := obj.(*corev1.Pod)
-	klog.V(1).InfoS("addPod", "Pod", pod.Namespace+"/"+pod.Name, "Time", time.Now())
+// podSyncCond provides a synchronization primitive that allows the mutating
+// webhook to unblock one in-flight request at a time when the informer cache is
+// ready.
+type podSyncCond struct {
+	m            sync.Mutex
+	wakeChan     chan struct{}
+	synced       bool
+	lastAdmitted string
+}
 
-	if t.lastAdmitted == "" {
-		// There is not a pending TPU worker Pod to the informer cache, unblock if waiting and return
-		for t.waiting > 0 {
-			t.wg.Done()
-			t.waiting -= 1
+func newPodSyncCond() *podSyncCond {
+	c := &podSyncCond{
+		wakeChan: make(chan struct{}, 1),
+		synced:   true,
+	}
+	return c
+}
+
+// Wait blocks until the cache is up-to-date or the timeout is reached.
+// up-to-date.
+func (c *podSyncCond) Wait(timeout time.Duration) (timedout bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	// The lock must be held while reading or writing c.synced, but cannot be
+	// held while blocking on the channel or timer.
+	c.m.Lock()
+	defer c.m.Unlock()
+
+	for !c.synced { // Lock is held while reading state.
+		c.m.Unlock() // Release lock while waiting to be unblocked.
+		select {
+		case <-c.wakeChan:
+			c.m.Lock()
+			continue // Try checking t.synced again with lock held.
+		case <-timer.C:
+			// If cache does not sync within the timeout, assume the
+			// lastAdmitted pod will never appear. Release the cache sync bit
+			// and return.
+			c.m.Lock()
+			klog.V(0).Infof("Timed out waiting for pod %q to be added to cache", c.lastAdmitted)
+			c.synced = true
+			return true
 		}
-		return
 	}
-	if t.waiting == 0 {
-		// Webhook is not waiting, no-op
-		return
+
+	// Drain wakeChan of any pre-buffered events that were waiting before Wait
+	// was called.
+drain:
+	for {
+		select {
+		case <-c.wakeChan:
+		default:
+			break drain
+		}
 	}
-	// Check if Pod in cache is the last admitted TPU Pod
-	isLastAdmitted, err := t.isLastAdmittedPod(pod)
-	if err != nil {
-		klog.Errorf("Invalid addPod: %s", err)
-		return
+	return false
+}
+
+// Admit invalidates the cache and blocks Lock until the admitted pod has synced
+// to the cache.
+func (c *podSyncCond) Admit(pod string) {
+	c.m.Lock()
+	defer c.m.Unlock()
+	c.synced = false
+	c.lastAdmitted = pod
+}
+
+// Signal marks a pod as received in the cache. The lock does not need to be
+// held. Returns true if the cache is marked synced as a result.
+func (c *podSyncCond) Signal(pod string) bool {
+	c.m.Lock()
+	defer c.m.Unlock()
+	// If the pod received by the informer matches the one we last admitted --
+	// and were waiting for -- then we can mark the cache as synced and wake one
+	// in-flight request.
+	if pod == c.lastAdmitted {
+		c.synced = true
+		c.lastAdmitted = ""
+
+		// Wake by sending to wakeChan. Select with an empty default allows us
+		// to skip if there is no blocked request.
+		select {
+		case c.wakeChan <- struct{}{}:
+		default:
+		}
+
+		return true
 	}
-	if isLastAdmitted {
-		// Informer cache has been updated, unblock the next Mutate call
-		t.wg.Done()
-		t.waiting -= 1
-	}
+	return false
 }
 
 // startServer sets up and runs the webhook's HTTP server.
