@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,7 +27,6 @@ var (
 	kubeconfig    *string
 	clientset     kubernetes.Interface
 	dynamicClient dynamic.Interface
-	initErr       error
 )
 
 func init() {
@@ -40,21 +40,21 @@ func init() {
 func TestMain(m *testing.M) {
 	flag.Parse()
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err == nil {
-		clientset, err = kubernetes.NewForConfig(config)
-		if err == nil {
-			dynamicClient, err = dynamic.NewForConfig(config)
-		}
+	if err != nil {
+		log.Fatalf("Failed to load Kubernetes config (E2E tests require a pre-existing cluster; see e2e/README.md): %v", err)
 	}
-	initErr = err
+	clientset, err = kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes clientset: %v", err)
+	}
+	dynamicClient, err = dynamic.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("Failed to create dynamic client: %v", err)
+	}
 	os.Exit(m.Run())
 }
 
 func TestWebhookMutation_V6eSingleHost(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	rayCluster := loadManifest(t, "../manifests/v6e/v6e-8-single-host.yaml")
 
 	labelSelector := fmt.Sprintf("ray.io/cluster=%s", rayCluster.Name)
@@ -75,10 +75,6 @@ func TestWebhookMutation_V6eSingleHost(t *testing.T) {
 }
 
 func TestWebhookMutation_V6eMultiHost(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	rayCluster := loadManifest(t, "../manifests/v6e/v6e-16-multi-host.yaml")
 
 	labelSelector := fmt.Sprintf("ray.io/cluster=%s", rayCluster.Name)
@@ -129,10 +125,6 @@ func TestWebhookMutation_V6eMultiHost(t *testing.T) {
 }
 
 func TestWebhookMutation_V6eMultiSlice(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	rayCluster := loadManifest(t, "../manifests/v6e/v6e-16-multi-slice.yaml")
 
 	labelSelector := fmt.Sprintf("ray.io/cluster=%s", rayCluster.Name)
@@ -178,10 +170,6 @@ func TestWebhookMutation_V6eMultiSlice(t *testing.T) {
 }
 
 func TestWebhookMutation_V6ePodChurnSingleSlice(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	clusterName := "tpu-v6e-multi-host"
 	labelSelector := fmt.Sprintf("ray.io/cluster=%s", clusterName)
 
@@ -261,10 +249,6 @@ func TestWebhookMutation_V6ePodChurnSingleSlice(t *testing.T) {
 }
 
 func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	clusterName := "tpu-v6e-multi-slice"
 	labelSelector := fmt.Sprintf("ray.io/cluster=%s", clusterName)
 

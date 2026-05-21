@@ -13,10 +13,6 @@ import (
 )
 
 func TestRayClusterValidation_InvalidTopology(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	baseCluster := loadManifest(t, "../manifests/invalid/invalid-topology.yaml")
 
 	t.Log("Running validating webhook case: Strict Topology Mismatch Rejection")
@@ -25,10 +21,6 @@ func TestRayClusterValidation_InvalidTopology(t *testing.T) {
 }
 
 func TestRayClusterValidation_MissingTopologyKey(t *testing.T) {
-	if initErr != nil {
-		t.Skipf("Skipping test as cluster clients could not be initialized: %v", initErr)
-	}
-
 	cluster := loadManifest(t, "../manifests/invalid/invalid-topology.yaml")
 	cluster.Name = "tpu-v6e-missing-topology"
 
