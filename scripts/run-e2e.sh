@@ -66,7 +66,7 @@ echo "Deploying Single-Host test manifest..."
 kubectl apply -f e2e/manifests/v6e/v6e-8-single-host.yaml
 set +e
 echo "Running Single-Host and Validation tests..."
-go test -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation"
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation"
 SINGLE_HOST_EXIT=$?
 set -e
 echo "Cleaning up Single-Host test manifest..."
@@ -80,7 +80,7 @@ echo "Deploying Multi-Host test manifest..."
 kubectl apply -f e2e/manifests/v6e/v6e-16-multi-host.yaml
 set +e
 echo "Running Multi-Host and Single-Slice Churn tests..."
-go test -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice"
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice"
 MULTI_HOST_EXIT=$?
 set -e
 echo "Cleaning up Multi-Host test manifest..."
@@ -94,7 +94,7 @@ echo "Deploying Megascale Multi-Slice test manifest..."
 kubectl apply -f e2e/manifests/v6e/v6e-16-multi-slice.yaml
 set +e
 echo "Running Megascale Multi-Slice and Multi-Slice Churn tests..."
-go test -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice"
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice"
 MULTI_SLICE_EXIT=$?
 set -e
 echo "Cleaning up Megascale Multi-Slice test manifest..."
