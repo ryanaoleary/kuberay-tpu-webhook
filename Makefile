@@ -1,23 +1,23 @@
-# Image URL to use all building/pushing image targets  
+# Image URL to use all building/pushing image targets
 IMG ?= us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.2.5-gke.1
 
 # For europe, use europe-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook
-  
-# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)  
-ifeq (,$(shell go env GOBIN))  
-GOBIN=$(shell go env GOPATH)/bin  
-else  
-GOBIN=$(shell go env GOBIN)  
-endif  
-  
+
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
+
 all: webhook
-  
-# Build manager binary  
-webhook:  
+
+# Build manager binary
+webhook:
 	go build -o bin/kuberay-tpu-webhook main.go
-  
-# Run against the configured Kubernetes cluster in ~/.kube/config  
-run: webhook  
+
+# Run against the configured Kubernetes cluster in ~/.kube/config
+run: webhook
 	go run ./main.go
 
 # Run go fmt against code.
@@ -30,25 +30,25 @@ vet:
 
 # Run go test against code.
 test:
-	go test ./...
+	go test -race -timeout 1m ./...
 
 # Run E2E tests.
 e2e:
 	./scripts/run-e2e.sh
-  
-uninstall:  
+
+uninstall:
 	kubectl delete -f deployments/
 
 # Deploy the webhook in-cluster
 deploy:
 	kubectl apply -f deployments/
-  
-# Build the docker image  
+
+# Build the docker image
 docker-build:
-	docker build . -t ${IMG} 
-  
-# Push the docker image  
-docker-push:  
+	docker build . -t ${IMG}
+
+# Push the docker image
+docker-push:
 	docker push ${IMG}
 
 deploy-cert:
@@ -57,5 +57,10 @@ deploy-cert:
 uninstall-cert:
 	kubectl delete -f certs/
 
-.PHONY: webhook run fmt vet test e2e deploy uninstall docker-build docker-push deploy-cert uninstall-cert
+img-swap:
+	docker build . -t ${IMG}
+	docker push ${IMG}
+	EDITOR="sed -i \"s|^\( \+\)image: .*$$|\1image: ${IMG}|\"" kubectl edit deployment -n ray-system kuberay-tpu-webhook
+
+.PHONY: webhook run fmt vet test e2e deploy uninstall docker-build docker-push deploy-cert uninstall-cert img-swap
 
