@@ -33,7 +33,16 @@ export REGION=us-central2
 export ZONE=us-central2-b
 ```
 
-### 2. Provision and Test
+### 2. Configuring Custom Ray Docker Images (Optional)
+By default, the E2E test suite uses the official **`rayproject/ray:nightly-tpu`** image to test the webhook with the latest Ray builds.
+
+You can easily override this to test a custom Ray image (or a specific version) by setting the `RAY_IMAGE` environment variable before running the suite:
+```bash
+# Example: Test a custom local or private registry image
+export RAY_IMAGE="rayproject/ray:2.35.0-py310-tpu"
+```
+
+### 3. Provision and Test
 Run the wrapper script with `--setup` to spin up the custom VPC, the GKE cluster, `cert-manager`, and the webhook:
 ```bash
 ./scripts/run-e2e.sh --setup

@@ -86,7 +86,7 @@ cat e2e/manifests/v7x/v7x-8-single-host.yaml | sed "s|rayproject/ray:nightly-tpu
 cat e2e/manifests/v7x/v7x-multi-container.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
 echo "Running Validation, Single-Host, & Multi-Container E2E tests (Group 1)..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation|TestWebhookMutation_HeterogeneousCluster|TestWebhookMutation_V7xSingleHost|TestWebhookMutation_V7xMultiContainer"
+go test -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation|TestWebhookMutation_HeterogeneousCluster|TestWebhookMutation_V7xSingleHost|TestWebhookMutation_V7xMultiContainer"
 GROUP1_EXIT=$?
 set -e
 echo "Cleaning up Validation, Single-Host, & Multi-Container manifests..."
@@ -108,7 +108,7 @@ cat e2e/manifests/v6e/v6e-16-multi-host.yaml | sed "s|rayproject/ray:nightly-tpu
 cat e2e/manifests/v7x/v7x-16-multi-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
 echo "Running Multi-Host, DNS, & Pod Churn E2E tests (Group 2)..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice|TestWebhookMutation_V6eDNSResolution|TestWebhookMutation_V7xMultiHost"
+go test -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice|TestWebhookMutation_V6eDNSResolution|TestWebhookMutation_V7xMultiHost"
 GROUP2_EXIT=$?
 set -e
 echo "Cleaning up Multi-Host manifests..."
@@ -128,7 +128,7 @@ cat e2e/manifests/v6e/v6e-16-multi-slice.yaml | sed "s|rayproject/ray:nightly-tp
 cat e2e/manifests/v7x/v7x-16-multi-slice.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
 echo "Running Multi-Slice (Megascale) & Multi-Slice Churn E2E tests (Group 3)..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice|TestWebhookMutation_V7xMultiSlice"
+go test -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice|TestWebhookMutation_V7xMultiSlice"
 GROUP3_EXIT=$?
 set -e
 echo "Cleaning up Multi-Slice manifests..."
@@ -136,6 +136,24 @@ kubectl delete -f e2e/manifests/v6e/v6e-16-multi-slice.yaml -n "$NAMESPACE" --ig
 kubectl delete -f e2e/manifests/v7x/v7x-16-multi-slice.yaml -n "$NAMESPACE" --ignore-not-found=true || true
 if [ $GROUP3_EXIT -ne 0 ]; then
     TEST_EXIT_CODE=$GROUP3_EXIT
+fi
+
+# Wait to allow TPU device plugin hardware state synchronization
+echo "Waiting 10 seconds for TPU hardware resource detransitions..."
+sleep 10
+
+# 4. Run JAX/XLA and Ray Core TPU Utilities Integration tests
+echo "Deploying JAX & Ray Core Utilities E2E integration manifests inside namespace $NAMESPACE..."
+cat e2e/manifests/v6e/v6e-integration-tpu-utils.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+set +e
+echo "Running JAX/XLA & Ray Core TPU Utilities E2E tests (Group 4)..."
+go test -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestWebhookIntegration_RayTPUUtilsAndJAX"
+GROUP4_EXIT=$?
+set -e
+echo "Cleaning up JAX & Ray Core Utilities manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-integration-tpu-utils.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP4_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP4_EXIT
 fi
 
 # Clean up dynamic isolated test namespace
