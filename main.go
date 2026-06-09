@@ -716,10 +716,10 @@ func getReplicaIndex(sliceToTPUHosts map[slice][]int, clusterName string, groupN
 		return 0
 	}
 	nextLowestId := math.MaxInt32
-	numReplicas := 0 // tracks # of replicas in worker group created so far
+	existingIndices := make(map[int]bool, len(sliceToTPUHosts))
 	for slice, workerList := range sliceToTPUHosts {
 		if slice.clusterName == clusterName && slice.groupName == groupName && slice.namespace == namespace {
-			numReplicas++
+			existingIndices[slice.replicaIndex] = true
 			createdPods := len(workerList)
 			if createdPods < int(slice.numOfHosts) {
 				if slice.replicaIndex < nextLowestId {
@@ -728,9 +728,19 @@ func getReplicaIndex(sliceToTPUHosts map[slice][]int, clusterName string, groupN
 			}
 		}
 	}
-	// first pod of new slice in cluster
+	// If no ID was found, this is the first pod of a new slice in the cluster,
+	// which should either be added to the end (one plus the last observed
+	// slice) or slot into an existing gap (e.g. a previous slice was
+	// preempted).
 	if nextLowestId == math.MaxInt32 {
-		nextLowestId = numReplicas
+		// By the pigeonhole principle, there must be at least one missing
+		// replica index in the range [0, len(existingIndices)].
+		for i := range len(existingIndices) + 1 {
+			if !existingIndices[i] {
+				nextLowestId = i
+				break
+			}
+		}
 	}
 	klog.V(1).InfoS("getReplicaIndex", "RayCluster", namespace+"/"+clusterName, "Worker Group", groupName, "Replica Index", nextLowestId)
 	return nextLowestId
