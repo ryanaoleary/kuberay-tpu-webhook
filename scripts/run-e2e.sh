@@ -8,6 +8,11 @@ PROJECT_ID=${PROJECT_ID:-$(gcloud config get project)}
 CLUSTER_NAME=${CLUSTER_NAME:-ray-llm-cluster}
 ZONE=${ZONE:-us-central2-b}
 NAMESPACE=${NAMESPACE:-default}
+RAY_IMAGE=${RAY_IMAGE:-rayproject/ray:nightly-tpu}
+if [ "$NAMESPACE" = "default" ]; then
+    NAMESPACE="test-ns-$(head /dev/urandom | tr -dc a-z0-9 | head -c 5)"
+fi
+export TEST_NAMESPACE="$NAMESPACE"
 REGION=${REGION:-us-central2}
 NETWORK_NAME=${NETWORK_NAME:-${CLUSTER_NAME}-net}
 SUBNET_NAME=${SUBNET_NAME:-${NETWORK_NAME}-subnet}
@@ -58,50 +63,84 @@ kubectl apply -f certs/
 echo "Waiting for webhook to be ready..."
 kubectl wait --for=condition=Available deployment/kuberay-tpu-webhook -n ray-system --timeout=300s
 
+# Wait for any terminating test namespaces from previous runs to fully clean up (prevents GKE TPU hardware resource locks)
+echo "Checking for any terminating namespaces in the cluster..."
+while kubectl get ns -o json | grep -q '"phase": "Terminating"'; do
+    echo "Waiting for terminating namespaces to fully release GKE TPU hardware..."
+    sleep 5
+done
+echo "Cluster is clean of terminating namespaces."
+
+# Create isolated test namespace
+echo "Creating isolated test namespace $NAMESPACE..."
+kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
 # Initialize final exit code
 TEST_EXIT_CODE=0
 
-# 1. Run Single-Host and Validation test sequence
-echo "Deploying Single-Host test manifest..."
-kubectl apply -f e2e/manifests/v6e/v6e-8-single-host.yaml
+# 1. Run Single-Host, Validation, Heterogeneous, and V7x Single-Host/Multi-Container tests
+echo "Deploying Single-Host, Heterogeneous, and V7x test manifests inside namespace $NAMESPACE..."
+cat e2e/manifests/v6e/v6e-8-single-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v6e/heterogeneous-cluster.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v7x/v7x-8-single-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v7x/v7x-multi-container.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
-echo "Running Single-Host and Validation tests..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation"
-SINGLE_HOST_EXIT=$?
+echo "Running Validation, Single-Host, & Multi-Container E2E tests (Group 1)..."
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eSingleHost|TestRayClusterValidation|TestWebhookMutation_HeterogeneousCluster|TestWebhookMutation_V7xSingleHost|TestWebhookMutation_V7xMultiContainer"
+GROUP1_EXIT=$?
 set -e
-echo "Cleaning up Single-Host test manifest..."
-kubectl delete -f e2e/manifests/v6e/v6e-8-single-host.yaml --ignore-not-found=true || true
-if [ $SINGLE_HOST_EXIT -ne 0 ]; then
-    TEST_EXIT_CODE=$SINGLE_HOST_EXIT
+echo "Cleaning up Validation, Single-Host, & Multi-Container manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-8-single-host.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v6e/heterogeneous-cluster.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v7x/v7x-8-single-host.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v7x/v7x-multi-container.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP1_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP1_EXIT
 fi
 
-# 2. Run Multi-Host and Single-Slice Churn test sequence
-echo "Deploying Multi-Host test manifest..."
-kubectl apply -f e2e/manifests/v6e/v6e-16-multi-host.yaml
+# Wait to allow TPU device plugin hardware state synchronization
+echo "Waiting 10 seconds for TPU hardware resource detransitions..."
+sleep 10
+
+# 2. Run Multi-Host, Single-Slice Churn, DNS, and V7x Multi-Host tests
+echo "Deploying Multi-Host and V7x Multi-Host manifests inside namespace $NAMESPACE..."
+cat e2e/manifests/v6e/v6e-16-multi-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v7x/v7x-16-multi-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
-echo "Running Multi-Host and Single-Slice Churn tests..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice"
-MULTI_HOST_EXIT=$?
+echo "Running Multi-Host, DNS, & Pod Churn E2E tests (Group 2)..."
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiHost|TestWebhookMutation_V6ePodChurnSingleSlice|TestWebhookMutation_V6eDNSResolution|TestWebhookMutation_V7xMultiHost"
+GROUP2_EXIT=$?
 set -e
-echo "Cleaning up Multi-Host test manifest..."
-kubectl delete -f e2e/manifests/v6e/v6e-16-multi-host.yaml --ignore-not-found=true || true
-if [ $MULTI_HOST_EXIT -ne 0 ]; then
-    TEST_EXIT_CODE=$MULTI_HOST_EXIT
+echo "Cleaning up Multi-Host manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-16-multi-host.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v7x/v7x-16-multi-host.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP2_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP2_EXIT
 fi
 
-# 3. Run Megascale Multi-Slice and Multi-Slice Churn test sequence
-echo "Deploying Megascale Multi-Slice test manifest..."
-kubectl apply -f e2e/manifests/v6e/v6e-16-multi-slice.yaml
+# Wait to allow TPU device plugin hardware state synchronization
+echo "Waiting 10 seconds for TPU hardware resource detransitions..."
+sleep 10
+
+# 3. Run Megascale Multi-Slice, Multi-Slice Churn, and V7x Multi-Slice tests
+echo "Deploying Megascale Multi-Slice and V7x Multi-Slice manifests inside namespace $NAMESPACE..."
+cat e2e/manifests/v6e/v6e-16-multi-slice.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v7x/v7x-16-multi-slice.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
 set +e
-echo "Running Megascale Multi-Slice and Multi-Slice Churn tests..."
-go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice"
-MULTI_SLICE_EXIT=$?
+echo "Running Multi-Slice (Megascale) & Multi-Slice Churn E2E tests (Group 3)..."
+go test -tags=e2e -v ./e2e/webhook/... -run "TestWebhookMutation_V6eMultiSlice|TestWebhookMutation_V6ePodChurnMultiSlice|TestWebhookMutation_V7xMultiSlice"
+GROUP3_EXIT=$?
 set -e
-echo "Cleaning up Megascale Multi-Slice test manifest..."
-kubectl delete -f e2e/manifests/v6e/v6e-16-multi-slice.yaml --ignore-not-found=true || true
-if [ $MULTI_SLICE_EXIT -ne 0 ]; then
-    TEST_EXIT_CODE=$MULTI_SLICE_EXIT
+echo "Cleaning up Multi-Slice manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-16-multi-slice.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v7x/v7x-16-multi-slice.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP3_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP3_EXIT
 fi
+
+# Clean up dynamic isolated test namespace
+echo "Deleting isolated test namespace $NAMESPACE..."
+kubectl delete namespace "$NAMESPACE" --ignore-not-found=true || true
 
 # Propagate test exit failure if any
 if [ $TEST_EXIT_CODE -ne 0 ]; then
@@ -110,7 +149,7 @@ if [ $TEST_EXIT_CODE -ne 0 ]; then
 fi
 
 
-# Teardown if requested and script finished successfully
+# Teardown GKE resources if requested and script finished successfully
 if [ "$TEARDOWN_CLUSTER" = true ]; then
     echo "Tearing down cluster $CLUSTER_NAME..."
     gcloud container clusters delete "$CLUSTER_NAME" --zone "$ZONE" --quiet || true

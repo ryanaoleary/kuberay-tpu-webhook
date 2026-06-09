@@ -1,7 +1,7 @@
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: tpu-v6e-multi-slice
+  name: tpu-v6e-invalid-hosts-zero
 spec:
   headGroupSpec:
     template:
@@ -15,19 +15,16 @@ spec:
             limits:
               cpu: "1"
   workerGroupSpecs:
-  - replicas: 2
-    minReplicas: 2
-    maxReplicas: 2
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
     groupName: tpu-worker-group
-    numOfHosts: 4
+    numOfHosts: 0
     template:
       spec:
         containers:
         - name: ray-worker
           image: rayproject/ray:nightly-tpu
-          env:
-          - name: MEGASCALE_NUM_SLICES
-            value: "2"
           resources:
             requests:
               google.com/tpu: "4"

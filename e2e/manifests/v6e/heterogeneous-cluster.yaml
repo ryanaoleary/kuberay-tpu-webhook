@@ -1,7 +1,7 @@
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: tpu-v6e-multi-slice
+  name: tpu-v6e-heterogeneous
 spec:
   headGroupSpec:
     template:
@@ -15,24 +15,37 @@ spec:
             limits:
               cpu: "1"
   workerGroupSpecs:
-  - replicas: 2
-    minReplicas: 2
-    maxReplicas: 2
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
     groupName: tpu-worker-group
-    numOfHosts: 4
+    numOfHosts: 1
     template:
       spec:
         containers:
         - name: ray-worker
           image: rayproject/ray:nightly-tpu
-          env:
-          - name: MEGASCALE_NUM_SLICES
-            value: "2"
           resources:
             requests:
-              google.com/tpu: "4"
+              google.com/tpu: "8"
             limits:
-              google.com/tpu: "4"
+              google.com/tpu: "8"
         nodeSelector:
           cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-          cloud.google.com/gke-tpu-topology: 4x4
+          cloud.google.com/gke-tpu-topology: 2x4
+  - replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    groupName: cpu-worker-group
+    template:
+      spec:
+        containers:
+        - name: ray-worker-cpu
+          image: rayproject/ray:nightly-tpu
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"

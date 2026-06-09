@@ -15,12 +15,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const (
+	errTopologyMismatch = "Number of workers in worker group not equal to specified topology"
+)
+
 func TestRayClusterValidation_InvalidTopology(t *testing.T) {
 	baseCluster := loadManifest(t, "../manifests/invalid/invalid-topology.yaml")
 
 	t.Log("Running validating webhook case: Strict Topology Mismatch Rejection")
 	// Base invalid-topology manifest has replica workerGroup with numOfHosts: 2 but requests 2x4 topology (expected 1 host)
-	assertRayClusterRejected(t, baseCluster, "Number of workers in worker group not equal to specified topology")
+	assertRayClusterRejected(t, baseCluster, errTopologyMismatch)
 }
 
 func TestRayClusterValidation_MissingTopologyKey(t *testing.T) {
@@ -37,6 +41,19 @@ func TestRayClusterValidation_MissingTopologyKey(t *testing.T) {
 	assertRayClusterRejected(t, cluster, "Failed to validate RayCluster")
 }
 
+func TestRayClusterValidation_NumOfHostsZero(t *testing.T) {
+	cluster := loadManifest(t, "../manifests/invalid/invalid-num-of-hosts-zero.yaml")
+	t.Log("Running validating webhook case: NumOfHosts=0 Rejection")
+	assertRayClusterRejected(t, cluster, errTopologyMismatch)
+}
+
+func TestRayClusterValidation_NumOfHostsOmitted(t *testing.T) {
+	cluster := loadManifest(t, "../manifests/invalid/invalid-num-of-hosts-omitted.yaml")
+	t.Log("Running validating webhook case: NumOfHosts omitted Rejection")
+	assertRayClusterRejected(t, cluster, errTopologyMismatch)
+}
+
+
 func assertRayClusterRejected(t *testing.T, cluster *rayv1.RayCluster, expectedErrorMessage string) {
 	t.Helper()
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cluster)
@@ -50,14 +67,16 @@ func assertRayClusterRejected(t *testing.T, cluster *rayv1.RayCluster, expectedE
 		Resource: "rayclusters",
 	}
 
-	_, err = dynamicClient.Resource(gvr).Namespace("default").Create(
+	res, err := dynamicClient.Resource(gvr).Namespace(testNamespace).Create(
 		t.Context(),
 		&unstructured.Unstructured{Object: unstructuredObj},
 		metav1.CreateOptions{},
 	)
-
-	// Assert that creation was rejected by the validating webhook
-	assert.Error(t, err, "Expected cluster creation to fail due to webhook validation")
+	if err == nil {
+		t.Logf("Cleaning up leaked RayCluster %q...", res.GetName())
+		_ = dynamicClient.Resource(gvr).Namespace(testNamespace).Delete(t.Context(), res.GetName(), metav1.DeleteOptions{})
+		t.Fatalf("Expected cluster creation to fail due to webhook validation, but it succeeded")
+	}
 
 	statusErr, ok := err.(*apierrors.StatusError)
 	if !ok {

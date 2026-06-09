@@ -1,7 +1,7 @@
 apiVersion: ray.io/v1
 kind: RayCluster
 metadata:
-  name: tpu-v6e-multi-slice
+  name: tpu-v7x-multi-slice
 spec:
   headGroupSpec:
     template:
@@ -19,7 +19,7 @@ spec:
     minReplicas: 2
     maxReplicas: 2
     groupName: tpu-worker-group
-    numOfHosts: 4
+    numOfHosts: 2
     template:
       spec:
         containers:
@@ -34,5 +34,5 @@ spec:
             limits:
               google.com/tpu: "4"
         nodeSelector:
-          cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
-          cloud.google.com/gke-tpu-topology: 4x4
+          cloud.google.com/gke-tpu-accelerator: tpu7x
+          cloud.google.com/gke-tpu-topology: 2x2x2
