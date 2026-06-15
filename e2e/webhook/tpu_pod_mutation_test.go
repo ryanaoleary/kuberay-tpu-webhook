@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/util/retry"
 )
 
 var (
@@ -445,7 +446,7 @@ func TestWebhookMutation_HeterogeneousCluster(t *testing.T) {
 }
 
 func TestWebhookMutation_V7xSingleHost(t *testing.T) {
-	rayCluster := loadManifest(t, "../manifests/v7x/v7x-8-single-host.yaml")
+	rayCluster := loadManifest(t, "../manifests/tpu7x/tpu7x-8-single-host.yaml")
 
 	labelSelector := getLabelSelector(t, rayCluster.Name)
 
@@ -464,7 +465,7 @@ func TestWebhookMutation_V7xSingleHost(t *testing.T) {
 }
 
 func TestWebhookMutation_V7xMultiHost(t *testing.T) {
-	rayCluster := loadManifest(t, "../manifests/v7x/v7x-16-multi-host.yaml")
+	rayCluster := loadManifest(t, "../manifests/tpu7x/tpu7x-16-multi-host.yaml")
 
 	labelSelector := getLabelSelector(t, rayCluster.Name)
 
@@ -588,7 +589,7 @@ func buildExpectedProcessAddresses(numOfHosts int, replicaIndexLabelVal string, 
 }
 
 func TestWebhookMutation_V7xMultiContainer(t *testing.T) {
-	rayCluster := loadManifest(t, "../manifests/v7x/v7x-multi-container.yaml")
+	rayCluster := loadManifest(t, "../manifests/tpu7x/tpu7x-multi-container.yaml")
 
 	labelSelector := fmt.Sprintf("%s=%s", utils.RayClusterLabelKey, rayCluster.Name)
 	t.Logf("Looking for pods with selector: %s", labelSelector)
@@ -616,7 +617,7 @@ func TestWebhookMutation_V7xMultiContainer(t *testing.T) {
 }
 
 func TestWebhookMutation_V7xMultiSlice(t *testing.T) {
-	rayCluster := loadManifest(t, "../manifests/v7x/v7x-16-multi-slice.yaml")
+	rayCluster := loadManifest(t, "../manifests/tpu7x/tpu7x-16-multi-slice.yaml")
 
 	labelSelector := getLabelSelector(t, rayCluster.Name)
 
@@ -649,7 +650,7 @@ func TestWebhookMutation_V7xMultiSlice(t *testing.T) {
 	assert.Equal(t, 2, sliceIds["1"], "Expected 2 worker pods in slice 1")
 
 	assert.Equal(t, 1, len(coordinatorAddresses), "All containers in a multi-slice group should share the same coordinator address")
-	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-v7x-multi-slice-headless:8081"], "Unexpected coordinator address")
+	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-7x-multi-slice-headless:8081"], "Unexpected coordinator address")
 }
 
 func TestWebhookMutation_V6eDNSResolution(t *testing.T) {
@@ -849,19 +850,23 @@ func triggerRayClusterReconcile(t *testing.T, clusterName string) {
 		Version:  "v1",
 		Resource: "rayclusters",
 	}
-	cluster, err := dynamicClient.Resource(gvr).Namespace(testNamespace).Get(t.Context(), clusterName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("Failed to get RayCluster %s: %v", clusterName, err)
-	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cluster, err := dynamicClient.Resource(gvr).Namespace(testNamespace).Get(t.Context(), clusterName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
 
-	annotations := cluster.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	annotations["tpu-webhook.gke.io/reconcile-trigger"] = fmt.Sprint(time.Now().UnixNano())
-	cluster.SetAnnotations(annotations)
+		annotations := cluster.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations["tpu-webhook.gke.io/reconcile-trigger"] = fmt.Sprint(time.Now().UnixNano())
+		cluster.SetAnnotations(annotations)
 
-	_, err = dynamicClient.Resource(gvr).Namespace(testNamespace).Update(t.Context(), cluster, metav1.UpdateOptions{})
+		_, err = dynamicClient.Resource(gvr).Namespace(testNamespace).Update(t.Context(), cluster, metav1.UpdateOptions{})
+		return err
+	})
+
 	if err != nil {
 		t.Fatalf("Failed to trigger reconciliation for RayCluster %s: %v", clusterName, err)
 	}
@@ -926,8 +931,8 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	headPod := waitForHeadPodRunning(t, clusterName, 10*time.Second)
 
 	// Write utility logging configuration and verification script into the head pod
-	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "tpu_logging.py", "/tmp/tpu_logging.py")
-	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
+	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "../scripts/tpu_logging.py", "/tmp/tpu_logging.py")
+	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "../scripts/verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
 
 	// Execute verify_tpu_utils.py via Python inside the head pod
 	t.Log("Running verify_tpu_utils.py E2E verification workload...")
