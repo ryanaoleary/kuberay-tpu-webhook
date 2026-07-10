@@ -905,7 +905,7 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	headPod := waitForAllPodsRunning(t, clusterName, 2, 240*time.Second)
 
 	// Write utility verification script into the head pod
-	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
+	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "../scripts/verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
 
 	// Execute verify_tpu_utils.py via Python inside the head pod
 	t.Log("Running verify_tpu_utils.py E2E verification workload...")
