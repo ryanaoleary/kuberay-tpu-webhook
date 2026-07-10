@@ -780,34 +780,13 @@ func writeLocalFileToPod(t *testing.T, podName string, containerName string, loc
 	}
 }
 
-func waitForHeadPodRunning(t *testing.T, clusterName string, timeout time.Duration) *corev1.Pod {
-	t.Helper()
-	t.Logf("Waiting for head pod of cluster %s to reach Running phase...", clusterName)
-	labelSelector := fmt.Sprintf("%s=%s", utils.RayClusterLabelKey, clusterName)
-	var headPod *corev1.Pod
-	err := wait.PollUntilContextTimeout(t.Context(), 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		pods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
-		for _, p := range pods.Items {
-			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeHead && p.Status.Phase == corev1.PodRunning {
-				headPod = &p
-				return true, nil
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		t.Fatalf("Head pod of cluster %s failed to reach Running phase within %v: %v", clusterName, timeout, err)
-	}
-	return headPod
-}
 
-func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount int, timeout time.Duration) {
+
+func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount int, timeout time.Duration) *corev1.Pod {
 	t.Helper()
 	t.Logf("Waiting for head pod and all %d worker pods of cluster %s to reach Running phase...", expectedWorkerCount, clusterName)
 	labelSelector := fmt.Sprintf("%s=%s", utils.RayClusterLabelKey, clusterName)
+	var headPod *corev1.Pod
 	err := wait.PollUntilContextTimeout(t.Context(), 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		pods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
 		if err != nil {
@@ -819,6 +798,8 @@ func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount
 		for _, p := range pods.Items {
 			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeHead && p.Status.Phase == corev1.PodRunning {
 				headRunning = true
+				pCopy := p
+				headPod = &pCopy
 			} else if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker {
 				if p.Status.Phase == corev1.PodRunning {
 					containerRunning := false
@@ -840,6 +821,7 @@ func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount
 	if err != nil {
 		t.Fatalf("Pods of cluster %s failed to reach Running phase within %v: %v", clusterName, timeout, err)
 	}
+	return headPod
 }
 
 func triggerRayClusterReconcile(t *testing.T, clusterName string) {
@@ -920,13 +902,9 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	clusterName := "tpu-v6e-integration"
 
 	// Wait for head pod and both TPU worker pods to reach Running phase
-	waitForAllPodsRunning(t, clusterName, 2, 240*time.Second)
+	headPod := waitForAllPodsRunning(t, clusterName, 2, 240*time.Second)
 
-	// Retrieve head pod reference to execute commands inside it
-	headPod := waitForHeadPodRunning(t, clusterName, 10*time.Second)
-
-	// Write utility logging configuration and verification script into the head pod
-	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "tpu_logging.py", "/tmp/tpu_logging.py")
+	// Write utility verification script into the head pod
 	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
 
 	// Execute verify_tpu_utils.py via Python inside the head pod
@@ -940,4 +918,3 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	t.Logf("Execution output:\n%s", stdout)
 	assert.Contains(t, stdout, "All Ray core TPU utilities and JAX/XLA distributed inits verified successfully.")
 }
-
