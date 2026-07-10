@@ -945,4 +945,3 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	t.Logf("Execution output:\n%s", stdout)
 	assert.Contains(t, stdout, "All Ray core TPU utilities and JAX/XLA distributed inits verified successfully.")
 }
-

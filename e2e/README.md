@@ -14,7 +14,7 @@ This directory contains end-to-end (E2E) qualification, mutation, and validation
 
 ## Dynamic Namespace Isolation
 
-To prevent ongoing test runs from conflicting or locking physical TPU resources, the E2E runner automatically allocates a unique, isolated test namespace (e.g. `test-ns-tfx7i`) for every run. 
+To prevent ongoing test runs from conflicting or locking physical TPU resources, the E2E runner automatically allocates a unique, isolated test namespace (e.g. `test-ns-tfx7i`) for every run.
 
 When the suite completes, it deletes the dynamic namespace to fully release the physical hardware and clean up cluster resources.
 

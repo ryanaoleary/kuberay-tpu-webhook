@@ -23,19 +23,19 @@ var rayJobGVR = schema.GroupVersionResource{
 func waitForRayJobSuccess(t *testing.T, jobName string, timeout time.Duration) {
 	t.Helper()
 	t.Logf("Waiting for RayJob %s to reach SUCCEEDED status...", jobName)
-	
+
 	err := wait.PollUntilContextTimeout(t.Context(), 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		unstructJob, err := dynamicClient.Resource(rayJobGVR).Namespace(testNamespace).Get(ctx, jobName, v1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
-		
+
 		status, found, err := unstructured.NestedString(unstructJob.Object, "status", "jobStatus")
 		if err != nil || !found {
 			t.Logf("RayJob %s status not found yet.", jobName)
 			return false, nil
 		}
-		
+
 		t.Logf("RayJob %s current status: %s", jobName, status)
 		if status == "SUCCEEDED" {
 			return true, nil
@@ -45,7 +45,7 @@ func waitForRayJobSuccess(t *testing.T, jobName string, timeout time.Duration) {
 		}
 		return false, nil
 	})
-	
+
 	if err != nil {
 		t.Fatalf("RayJob %s did not succeed within %v: %v", jobName, timeout, err)
 	}
