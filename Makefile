@@ -26,8 +26,7 @@ fmt:
 	@if command -v pre-commit >/dev/null 2>&1; then \
 		pre-commit run --all-files; \
 	else \
-		echo "pre-commit not installed. Please run: pip install pre-commit && pre-commit install"; \
-		exit 1; \
+		echo "Warning: pre-commit not found. Skipping python formatting."; \
 	fi
 
 # Run go vet against code.
