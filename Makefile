@@ -20,7 +20,7 @@ webhook:
 run: webhook
 	go run ./main.go
 
-# Run go fmt against code.
+# Run formatting against code.
 fmt:
 	go fmt ./...
 	@if command -v pre-commit >/dev/null 2>&1; then \
