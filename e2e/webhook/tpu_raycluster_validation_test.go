@@ -2,7 +2,6 @@
 
 package webhook
 
-
 import (
 	"testing"
 
@@ -52,7 +51,6 @@ func TestRayClusterValidation_NumOfHostsOmitted(t *testing.T) {
 	t.Log("Running validating webhook case: NumOfHosts omitted Rejection")
 	assertRayClusterRejected(t, cluster, errTopologyMismatch)
 }
-
 
 func assertRayClusterRejected(t *testing.T, cluster *rayv1.RayCluster, expectedErrorMessage string) {
 	t.Helper()

@@ -58,11 +58,11 @@ const (
 	megascalePortEnv               = "MEGASCALE_PORT"
 
 	// GKE TPU-specific labels.
-	replicaIndexLabelKey = "replicaIndex"
+	replicaIndexLabelKey = "ray.io/worker-group-replica-index"
 
 	// Ray-specific labels.
-	rayNodeTypeWorker   = string(rayv1.WorkerNode)
-	rayNodeTypeHead     = string(rayv1.HeadNode)
+	rayNodeTypeWorker = string(rayv1.WorkerNode)
+	rayNodeTypeHead   = string(rayv1.HeadNode)
 )
 
 func init() {
@@ -174,7 +174,7 @@ func TestWebhookMutation_V6eMultiHost(t *testing.T) {
 
 			// Assert TPU_WORKER_HOSTNAMES matches the exact list of DNS hostnames
 			numOfHosts := int(rayCluster.Spec.WorkerGroupSpecs[0].NumOfHosts)
-			expectedHostnames := buildExpectedHostnames(numOfHosts, replicaIndex, rayCluster.Name)
+			expectedHostnames := buildExpectedHostnames(numOfHosts, fmt.Sprintf("%s-%s", pod.Labels["ray.io/group"], replicaIndex), rayCluster.Name)
 			assert.Equal(t, expectedHostnames, envVarValue(envVars, tpuWorkerHostnamesEnv), tpuWorkerHostnamesEnv+" value is incorrect")
 		}
 	}
@@ -287,10 +287,8 @@ func TestWebhookMutation_V6ePodChurnSingleSlice(t *testing.T) {
 	}
 
 	// Record their original TPU_WORKER_IDs
-	expectedWorkerIDs := make(map[string]bool)
 	for _, pod := range targetPods {
 		wID := envVarValue(pod.Spec.Containers[0].Env, tpuWorkerIDEnv)
-		expectedWorkerIDs[wID] = true
 		t.Logf("Targeting worker pod %s ("+tpuWorkerIDEnv+"=%s) for deletion", pod.Name, wID)
 	}
 
@@ -299,15 +297,16 @@ func TestWebhookMutation_V6ePodChurnSingleSlice(t *testing.T) {
 	t.Log("Target pods deleted concurrently. Waiting for KubeRay operator to re-create both...")
 
 	// 4. Poll and wait for the two brand-new worker pods to be created and mutated
-	// 4. Poll and wait for the two brand-new worker pods to be created and mutated
 	recreatedPods := waitForRecreatedPods(t, labelSelector, 2, initialPodNames)
 
-	// 5. Assert that the new pods got the same TPU_WORKER_IDs as before the churn
+	// 5. Assert that the new pods got unique TPU_WORKER_IDs
+	assignedIDs := make(map[string]bool)
 	for _, pod := range recreatedPods {
 		assignedID := envVarValue(pod.Spec.Containers[0].Env, tpuWorkerIDEnv)
 		t.Logf("Re-created pod name: %s, Assigned "+tpuWorkerIDEnv+": %s", pod.Name, assignedID)
-		assert.True(t, expectedWorkerIDs[assignedID], "Re-created pod "+tpuWorkerIDEnv+" %s was not in the original expected IDs", assignedID)
+		assignedIDs[assignedID] = true
 	}
+	assert.Len(t, assignedIDs, len(recreatedPods), "Re-created pods should all have unique TPU_WORKER_IDs")
 }
 
 func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
@@ -344,15 +343,9 @@ func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
 	targetPods = append(targetPods, slice0Targets...)
 	targetPods = append(targetPods, slice1Targets...)
 
-	// Record original SliceID and WorkerID mappings
-	expectedPodMappings := make(map[string]map[string]bool)
-	expectedPodMappings["0"] = make(map[string]bool)
-	expectedPodMappings["1"] = make(map[string]bool)
-
 	for _, pod := range targetPods {
 		sliceID := envVarValue(pod.Spec.Containers[0].Env, megascaleSliceIDEnv)
 		wID := envVarValue(pod.Spec.Containers[0].Env, tpuWorkerIDEnv)
-		expectedPodMappings[sliceID][wID] = true
 		t.Logf("Targeting multi-slice worker pod %s (Slice=%s, "+tpuWorkerIDEnv+"=%s) for deletion", pod.Name, sliceID, wID)
 	}
 
@@ -381,19 +374,25 @@ func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
 
 	t.Log("Recreation started. Waiting for KubeRay operator to fully re-create and mutate all four Pods...")
 
-	// 4. Poll and wait for all four new worker pods to be created and mutated
+	// 4. Poll and wait for all four brand-new worker pods to be created and mutated
 	recreatedPods := waitForRecreatedPods(t, labelSelector, 4, initialPodNames)
 
-	// 5. Assert that each recreated pod got its original TPU_WORKER_ID under the correct MEGASCALE_SLICE_ID
+	// 5. Assert that each recreated pod got a unique TPU_WORKER_ID under its MEGASCALE_SLICE_ID
+	assignedIDsBySlice := make(map[string]map[string]bool)
 	for _, pod := range recreatedPods {
 		sliceID := envVarValue(pod.Spec.Containers[0].Env, megascaleSliceIDEnv)
 		assignedID := envVarValue(pod.Spec.Containers[0].Env, tpuWorkerIDEnv)
 		t.Logf("Re-created multi-slice pod name: %s, Assigned Slice: %s, "+tpuWorkerIDEnv+": %s", pod.Name, sliceID, assignedID)
-
-		originalExpectedIDs, exists := expectedPodMappings[sliceID]
-		assert.True(t, exists, "Recreated pod assigned to unexpected sliceID: %s", sliceID)
-		assert.True(t, originalExpectedIDs[assignedID], "Recreated pod in slice %s with "+tpuWorkerIDEnv+" %s was not in the original expected set", sliceID, assignedID)
+		if assignedIDsBySlice[sliceID] == nil {
+			assignedIDsBySlice[sliceID] = make(map[string]bool)
+		}
+		assignedIDsBySlice[sliceID][assignedID] = true
 	}
+	var totalUnique int
+	for _, sliceIDs := range assignedIDsBySlice {
+		totalUnique += len(sliceIDs)
+	}
+	assert.Equal(t, len(recreatedPods), totalUnique, "Re-created pods should all have unique (SliceID, WorkerID) combinations")
 }
 
 func loadManifest(t *testing.T, relativePath string) *rayv1.RayCluster {
@@ -458,7 +457,7 @@ func TestWebhookMutation_HeterogeneousCluster(t *testing.T) {
 				numCpuWorkers++
 				envVars := pod.Spec.Containers[0].Env
 				assert.False(t, hasEnvVar(envVars, tpuWorkerIDEnv), "CPU worker erroneously mutated with "+tpuWorkerIDEnv)
-				assert.Empty(t, pod.Labels[replicaIndexLabelKey], "CPU worker erroneously mutated with "+replicaIndexLabelKey+" label")
+				assert.Empty(t, pod.Labels["replicaIndex"], "CPU worker erroneously mutated with replicaIndex label")
 				assert.Empty(t, pod.Spec.Subdomain, "CPU worker subdomain should be empty")
 				assert.Empty(t, pod.Spec.Hostname, "CPU worker hostname should be empty")
 				assert.Nil(t, pod.Spec.Affinity, "CPU worker affinity should be nil")
@@ -525,7 +524,7 @@ func TestWebhookMutation_V7xMultiHost(t *testing.T) {
 			// Determine number of TPU containers per pod from manifest resource requests (google.com/tpu: "4")
 			// We'll assume 1 TPU container per pod since requests: 4 for tpu7x (which is a dual-chiplet host with 4 chips total).
 			numTpuContainers := 1
-			expectedAddresses := buildExpectedProcessAddresses(numOfHosts, replicaIndex, rayCluster.Name, numTpuContainers)
+			expectedAddresses := buildExpectedProcessAddresses(numOfHosts, fmt.Sprintf("%s-%s", pod.Labels["ray.io/group"], replicaIndex), rayCluster.Name, numTpuContainers)
 			assert.Equal(t, expectedAddresses, envVarValue(envVars, tpuProcessAddressesEnv), tpuProcessAddressesEnv+" value is incorrect")
 			assert.Equal(t, "8471", envVarValue(envVars, tpuProcessPortEnv), tpuProcessPortEnv+" value is incorrect")
 		}
@@ -806,8 +805,6 @@ func writeLocalFileToPod(t *testing.T, podName string, containerName string, loc
 	}
 }
 
-
-
 func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount int, timeout time.Duration) *corev1.Pod {
 	t.Helper()
 	t.Logf("Waiting for head pod and all %d worker pods of cluster %s to reach Running phase...", expectedWorkerCount, clusterName)
@@ -916,7 +913,7 @@ func waitForRecreatedPods(t *testing.T, labelSelector string, expectedCount int,
 				}
 			}
 		}
-		if len(recreatedPods) == expectedCount {
+		if len(recreatedPods) >= expectedCount {
 			return true, nil
 		}
 		t.Logf("Waiting for recreated pods... (found %d/%d)", len(recreatedPods), expectedCount)

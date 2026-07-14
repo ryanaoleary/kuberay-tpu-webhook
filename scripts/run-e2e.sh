@@ -9,6 +9,8 @@ CLUSTER_NAME=${CLUSTER_NAME:-ray-llm-cluster}
 NAMESPACE=${NAMESPACE:-default}
 RAY_IMAGE=${RAY_IMAGE:-rayproject/ray:nightly-tpu}
 RAY_TPU7X_IMAGE=${RAY_TPU7X_IMAGE:-rayproject/ray:nightly-py312-tpu}
+RAY_SERVE_IMAGE=${RAY_SERVE_IMAGE:-vllm/vllm-tpu:nightly}
+WEBHOOK_IMAGE=${WEBHOOK_IMAGE:-}
 if [ "$NAMESPACE" = "default" ]; then
     NAMESPACE="test-ns-$(head /dev/urandom | tr -dc a-z0-9 | head -c 5)"
 fi
@@ -53,7 +55,13 @@ fi
 
 # Install webhook and certificate issuer
 echo "Installing webhook..."
-kubectl apply -f deployments/deployment.yaml
+if [ -n "$WEBHOOK_IMAGE" ]; then
+    echo "Deploying webhook with custom image: $WEBHOOK_IMAGE..."
+    cat deployments/deployment.yaml | sed -E "s|image: +[^ ]+|image: $WEBHOOK_IMAGE|g" | sed "s|imagePullPolicy: IfNotPresent|imagePullPolicy: Always|g" | kubectl apply -f -
+else
+    echo "Deploying webhook with default official image from deployments/deployment.yaml..."
+    kubectl apply -f deployments/deployment.yaml
+fi
 kubectl apply -f deployments/webhook-svc.yaml
 kubectl apply -f deployments/mutating-webhook-cfg.yaml
 kubectl apply -f deployments/validating-webhook-cfg.yaml
@@ -74,6 +82,13 @@ echo "Cluster is clean of terminating namespaces."
 # Create isolated test namespace
 echo "Creating isolated test namespace $NAMESPACE..."
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+if kubectl get secret hf-token-secret -n default >/dev/null 2>&1; then
+    echo "Copying hf-token-secret from default namespace to $NAMESPACE..."
+    kubectl get secret hf-token-secret -n default -o yaml | sed 's/namespace: default/namespace: '"$NAMESPACE"'/' | kubectl apply -f -
+else
+    echo "Warning: hf-token-secret not found in default namespace. Downloads of gated/private models may fail."
+fi
 
 # Initialize final exit code
 TEST_EXIT_CODE=0
@@ -162,6 +177,22 @@ kubectl delete -f e2e/manifests/v6e/v6e-integration-tpu-utils.yaml -n "$NAMESPAC
 	kubectl delete -f e2e/manifests/tpu7x/tpu7x-jax-train-rayjob.yaml -n "$NAMESPACE" --ignore-not-found=true || true
 	if [ $GROUP5_EXIT -ne 0 ]; then
 		TEST_EXIT_CODE=$GROUP5_EXIT
+	fi
+	# 6. Run RayServe integration tests
+	echo "Deploying RayServe integration manifests inside namespace $NAMESPACE..."
+	kubectl create configmap rayservice-script --from-file=serve_tpu_multihost.py=e2e/scripts/serve_tpu_multihost.py --from-file=sitecustomize.py=e2e/scripts/sitecustomize.py -n "$NAMESPACE"
+	cat e2e/manifests/v6e/v6e-rayservice-single.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+	cat e2e/manifests/v6e/v6e-rayservice-multi.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+	set +e
+	echo "Running RayServe integration tests (Group 6)..."
+	go test -timeout 60m -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestRayServiceIntegration"
+	GROUP6_EXIT=$?
+	set -e
+	echo "Cleaning up RayServe integration manifests..."
+	kubectl delete -f e2e/manifests/v6e/v6e-rayservice-single.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+	kubectl delete -f e2e/manifests/v6e/v6e-rayservice-multi.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+	if [ $GROUP6_EXIT -ne 0 ]; then
+		TEST_EXIT_CODE=$GROUP6_EXIT
 	fi
 # Clean up dynamic isolated test namespace
 echo "Deleting isolated test namespace $NAMESPACE..."

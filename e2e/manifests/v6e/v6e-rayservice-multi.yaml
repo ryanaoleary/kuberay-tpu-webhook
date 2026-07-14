@@ -1,0 +1,108 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: v6e-rayservice-multi
+spec:
+  serveConfigV2: |
+    applications:
+    - import_path: app.serve_tpu_multihost:deployment
+      name: llm
+      runtime_env:
+        env_vars:
+          ACCELERATOR_TYPE: TPU-V6E
+          MAX_MODEL_LEN: '4096'
+          MODEL_ID: 'Qwen/Qwen1.5-0.5B-Chat'
+          PYTHONPATH: /:/app
+          TENSOR_PARALLEL_SIZE: '16'
+          TPU_TOPOLOGY: 4x4
+          VLLM_XLA_CACHE_PATH: /tmp/vllm_xla_cache
+          TPU_MULTIHOST_BACKEND: 'ray'
+          HF_HUB_DISABLE_XET: '1'
+      deployments:
+      - name: LLMServer:Qwen--Qwen1_5-0_5B-Chat
+        health_check_timeout_s: 300
+    http_options:
+      host: 0.0.0.0
+      port: 8000
+  rayClusterConfig:
+    headGroupSpec:
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+          - image: vllm/vllm-tpu:nightly
+            imagePullPolicy: Always
+            name: ray-head
+            env:
+            - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
+              value: python
+            - name: PYTHONPATH
+              value: /app
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            readinessProbe: &id001
+              exec:
+                command:
+                - bash
+                - -c
+                - wget --tries 1 -T 2 -q -O- http://localhost:52365/api/local_raylet_healthz
+                  | grep success
+              failureThreshold: 10
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              successThreshold: 1
+              timeoutSeconds: 2
+            resources:
+              limits:
+                cpu: '2'
+              requests:
+                cpu: '2'
+            volumeMounts:
+            - mountPath: /app
+              name: script-vol
+          volumes:
+          - configMap:
+              name: rayservice-script
+            name: script-vol
+    workerGroupSpecs:
+    - groupName: tpu-worker-group
+      maxReplicas: 1
+      minReplicas: 1
+      numOfHosts: 4
+      rayStartParams: {}
+      replicas: 1
+      template:
+        spec:
+          containers:
+          - image: vllm/vllm-tpu:nightly
+            imagePullPolicy: Always
+            name: ray-worker
+            env:
+            - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
+              value: python
+            - name: PYTHONPATH
+              value: /app
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: token
+            readinessProbe: *id001
+            resources:
+              limits:
+                google.com/tpu: "4"
+              requests:
+                google.com/tpu: "4"
+            volumeMounts:
+            - mountPath: /app
+              name: script-vol
+          volumes:
+          - configMap:
+              name: rayservice-script
+            name: script-vol
+          nodeSelector:
+            cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+            cloud.google.com/gke-tpu-topology: 4x4
