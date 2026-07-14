@@ -58,12 +58,18 @@ const (
 	megascalePortEnv               = "MEGASCALE_PORT"
 
 	// GKE TPU-specific labels.
-	replicaIndexLabelKey = "replicaIndex"
 
 	// Ray-specific labels.
 	rayNodeTypeWorker   = string(rayv1.WorkerNode)
 	rayNodeTypeHead     = string(rayv1.HeadNode)
 )
+
+func getReplicaIndexLabelVal(pod corev1.Pod) string {
+	if val, ok := pod.Labels["ray.io/worker-group-replica-index"]; ok {
+		return fmt.Sprintf("%s-%s", pod.Labels["ray.io/group"], val)
+	}
+	return pod.Labels["replicaIndex"]
+}
 
 func init() {
 	if flag.Lookup("kubeconfig") == nil {
@@ -147,8 +153,8 @@ func TestWebhookMutation_V6eMultiHost(t *testing.T) {
 			workerIds[workerId] = true
 			tpuNames[tpuName] = true
 
-			replicaIndex := pod.Labels[replicaIndexLabelKey]
-			assert.NotEmpty(t, replicaIndex, replicaIndexLabelKey+" label is missing")
+			replicaIndex := getReplicaIndexLabelVal(pod)
+			assert.NotEmpty(t, replicaIndex, "replica index label is missing")
 			replicaIndices[replicaIndex] = true
 
 			assert.NotEmpty(t, pod.Spec.Subdomain, "Subdomain not set")
@@ -187,7 +193,7 @@ func TestWebhookMutation_V6eMultiHost(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, len(tpuNames), "All pods in the same slice should share the same "+tpuNameEnv)
-	assert.Equal(t, 1, len(replicaIndices), "All pods in the same slice should share the same "+replicaIndexLabelKey)
+	assert.Equal(t, 1, len(replicaIndices), "All pods in the same slice should share the same replica index")
 }
 
 func TestWebhookMutation_TorchTpuEnvs(t *testing.T) {
@@ -453,12 +459,12 @@ func TestWebhookMutation_HeterogeneousCluster(t *testing.T) {
 				numTpuWorkers++
 				envVars := pod.Spec.Containers[0].Env
 				assert.True(t, hasEnvVar(envVars, tpuWorkerIDEnv), "TPU worker missing "+tpuWorkerIDEnv)
-				assert.NotEmpty(t, pod.Labels[replicaIndexLabelKey], "TPU worker missing "+replicaIndexLabelKey+" label")
+				assert.NotEmpty(t, getReplicaIndexLabelVal(pod), "TPU worker missing replica index label")
 			} else if pod.Labels[utils.RayNodeGroupLabelKey] == "cpu-worker-group" {
 				numCpuWorkers++
 				envVars := pod.Spec.Containers[0].Env
 				assert.False(t, hasEnvVar(envVars, tpuWorkerIDEnv), "CPU worker erroneously mutated with "+tpuWorkerIDEnv)
-				assert.Empty(t, pod.Labels[replicaIndexLabelKey], "CPU worker erroneously mutated with "+replicaIndexLabelKey+" label")
+				assert.Empty(t, pod.Labels["replicaIndex"], "CPU worker erroneously mutated with replicaIndex label")
 				assert.Empty(t, pod.Spec.Subdomain, "CPU worker subdomain should be empty")
 				assert.Empty(t, pod.Spec.Hostname, "CPU worker hostname should be empty")
 				assert.Nil(t, pod.Spec.Affinity, "CPU worker affinity should be nil")
@@ -517,8 +523,8 @@ func TestWebhookMutation_V7xMultiHost(t *testing.T) {
 			assert.NotEmpty(t, pod.Spec.Subdomain, "Subdomain not set")
 			assert.NotEmpty(t, pod.Spec.Hostname, "Hostname not set")
 
-			replicaIndex := pod.Labels[replicaIndexLabelKey]
-			assert.NotEmpty(t, replicaIndex, replicaIndexLabelKey+" label is missing")
+			replicaIndex := getReplicaIndexLabelVal(pod)
+			assert.NotEmpty(t, replicaIndex, "replica index label is missing")
 
 			// Assert v7x-specific process address variables dynamically
 			numOfHosts := int(rayCluster.Spec.WorkerGroupSpecs[0].NumOfHosts)

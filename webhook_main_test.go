@@ -1010,22 +1010,22 @@ func Test_InjectTorchTpuEnvsIfNeeded(t *testing.T) {
 				testPod.Spec.Containers[0].Env = tc.initialEnv
 			}
 			patches := []patch{}
-			
+
 			_, err := injectTorchTpuEnvsIfNeeded(tc.hostnames, testPod, testPod.Spec.Containers[0], "/spec/containers/0/env", &patches, len(testPod.Spec.Containers[0].Env) > 0, strings.HasPrefix(tc.accelerator, "tpu7x"))
-			
+
 			if tc.expectError {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
-			
+
 			if tc.expectedTopology != "" {
 				if assert.GreaterOrEqual(t, len(patches), 2) {
 					// Check TOPOLOGY patch
 					assert.Equal(t, "/spec/containers/0/env", patches[0]["path"])
 					expectedTopoEnv := []corev1.EnvVar{{Name: "TORCH_TPU_TOPOLOGY", Value: tc.expectedTopology}}
 					assert.Equal(t, expectedTopoEnv, patches[0]["value"])
-					
+
 					// Check SLICEBUILDER_ADDRESSES patch
 					assert.Equal(t, "/spec/containers/0/env/-", patches[1]["path"])
 					expectedAddrEnv := corev1.EnvVar{Name: "TORCH_TPU_SLICEBUILDER_ADDRESSES", Value: tc.expectedAddresses}
