@@ -1,0 +1,24 @@
+run:
+  cache-dir: .golangci-lint-cache
+  go: "1.23"
+  timeout: 5m
+  # TODO (ryanaoleary@): Fix go formatting issues in legacy files and remove exclude-files.
+issues:
+  exclude-files:
+    - "^main\\.go$"
+    - ".*_main_test\\.go$"
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - staticcheck
+    - unused
+    - errcheck
+    - ineffassign
+    - lll
+
+linters-settings:
+  lll:
+    line-length: 120
+
