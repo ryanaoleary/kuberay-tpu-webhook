@@ -22,6 +22,10 @@ run: webhook
 
 # Run formatting against code.
 fmt:
+	@if [ ! -f ./bin/golangci-lint ]; then \
+		echo "Installing golangci-lint locally in ./bin..."; \
+		GOBIN=$(CURDIR)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5; \
+	fi
 	go fmt ./...
 	@if command -v pre-commit >/dev/null 2>&1; then \
 		pre-commit run --all-files; \

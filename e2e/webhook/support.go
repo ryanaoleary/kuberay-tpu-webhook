@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,7 +28,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 )
@@ -69,40 +67,13 @@ const (
 func init() {
 	if flag.Lookup("kubeconfig") == nil {
 		if home := os.Getenv("HOME"); home != "" {
-			kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+			kubeconfig = flag.String("kubeconfig",
+				filepath.Join(home, ".kube", "config"),
+				"(optional) absolute path to the kubeconfig file")
 		} else {
 			kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
 		}
 	}
-}
-
-func TestMain(m *testing.M) {
-	flag.Parse()
-	if ns := os.Getenv("TEST_NAMESPACE"); ns != "" {
-		testNamespace = ns
-	}
-	var path string
-	if kubeconfig != nil && *kubeconfig != "" {
-		path = *kubeconfig
-	} else if home := os.Getenv("HOME"); home != "" {
-		path = filepath.Join(home, ".kube", "config")
-	}
-
-	var err error
-
-	restConfig, err = clientcmd.BuildConfigFromFlags("", path)
-	if err != nil {
-		log.Fatalf("Failed to load Kubernetes config (E2E tests require a pre-existing cluster; see e2e/README.md): %v", err)
-	}
-	clientset, err = kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		log.Fatalf("Failed to create Kubernetes clientset: %v", err)
-	}
-	dynamicClient, err = dynamic.NewForConfig(restConfig)
-	if err != nil {
-		log.Fatalf("Failed to create dynamic client: %v", err)
-	}
-	os.Exit(m.Run())
 }
 
 func loadManifest(t *testing.T, relativePath string) *rayv1.RayCluster {
@@ -129,19 +100,21 @@ func loadManifest(t *testing.T, relativePath string) *rayv1.RayCluster {
 func waitForPods(t *testing.T, labelSelector string, expectedCount int) *corev1.PodList {
 	t.Helper()
 	var pods *corev1.PodList
-	err := wait.PollUntilContextTimeout(t.Context(), 1*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-		var err error
-		pods, err = clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
-		if len(pods.Items) >= expectedCount {
-			return true, nil
-		}
-		return false, nil
-	})
+	err := wait.PollUntilContextTimeout(t.Context(), 1*time.Second, 30*time.Second,
+		true, func(ctx context.Context) (bool, error) {
+			var err error
+			pods, err = clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return false, err
+			}
+			if len(pods.Items) >= expectedCount {
+				return true, nil
+			}
+			return false, nil
+		})
 	if err != nil {
-		t.Fatalf("Error waiting for %d pods with selector %s: %v (found %d pods)", expectedCount, labelSelector, err, len(pods.Items))
+		t.Fatalf("Error waiting for %d pods with selector %s: %v (found %d pods)",
+			expectedCount, labelSelector, err, len(pods.Items))
 	}
 	return pods
 }
@@ -178,16 +151,17 @@ func deletePodsConcurrently(t *testing.T, pods []corev1.Pod) {
 			}
 
 			// Wait for the pod to be completely removed from the API server (graceful cleanup finished)
-			err = wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {
-				_, err := clientset.CoreV1().Pods(testNamespace).Get(ctx, podName, metav1.GetOptions{})
-				if err != nil {
-					if apierrors.IsNotFound(err) {
-						return true, nil
+			err = wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 60*time.Second,
+				true, func(ctx context.Context) (bool, error) {
+					_, err := clientset.CoreV1().Pods(testNamespace).Get(ctx, podName, metav1.GetOptions{})
+					if err != nil {
+						if apierrors.IsNotFound(err) {
+							return true, nil
+						}
+						return false, err
 					}
-					return false, err
-				}
-				return false, nil
-			})
+					return false, nil
+				})
 			if err != nil {
 				t.Errorf("Pod %s was not fully deleted within 60s: %v", podName, err)
 			}
@@ -208,7 +182,9 @@ func buildExpectedHostnames(numOfHosts int, replicaIndexLabelVal string, cluster
 	return strings.Join(hostnames, ",")
 }
 
-func buildExpectedProcessAddresses(numOfHosts int, replicaIndexLabelVal string, clusterName string, numTpuContainers int) string {
+func buildExpectedProcessAddresses(
+	numOfHosts int, replicaIndexLabelVal string, clusterName string, numTpuContainers int,
+) string {
 	headlessService := fmt.Sprintf("%s-headless", clusterName)
 	var addresses []string
 	for h := 0; h < numOfHosts; h++ {
@@ -264,42 +240,47 @@ func writeLocalFileToPod(t *testing.T, podName string, containerName string, loc
 	}
 }
 
-func waitForAllPodsRunning(t *testing.T, clusterName string, expectedWorkerCount int, timeout time.Duration) *corev1.Pod {
+func waitForAllPodsRunning(
+	t *testing.T, clusterName string, expectedWorkerCount int, timeout time.Duration,
+) *corev1.Pod {
 	t.Helper()
-	t.Logf("Waiting for head pod and all %d worker pods of cluster %s to reach Running phase...", expectedWorkerCount, clusterName)
+	t.Logf("Waiting for head pod and all %d worker pods of cluster %s to reach Running phase...",
+		expectedWorkerCount, clusterName)
 	labelSelector := fmt.Sprintf("%s=%s", utils.RayClusterLabelKey, clusterName)
 	var headPod *corev1.Pod
-	err := wait.PollUntilContextTimeout(t.Context(), 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-		pods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
+	err := wait.PollUntilContextTimeout(t.Context(), 5*time.Second, timeout,
+		true, func(ctx context.Context) (bool, error) {
+			pods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return false, err
+			}
 
-		headRunning := false
-		workerRunningCount := 0
-		for _, p := range pods.Items {
-			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeHead && p.Status.Phase == corev1.PodRunning {
-				headRunning = true
-				pCopy := p
-				headPod = &pCopy
-			} else if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker {
-				if p.Status.Phase == corev1.PodRunning {
-					containerRunning := false
-					for _, cs := range p.Status.ContainerStatuses {
-						if cs.Name == p.Spec.Containers[0].Name && cs.State.Running != nil {
-							containerRunning = true
-							break
+			headRunning := false
+			workerRunningCount := 0
+			for _, p := range pods.Items {
+				if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeHead && p.Status.Phase == corev1.PodRunning {
+					headRunning = true
+					pCopy := p
+					headPod = &pCopy
+				} else if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker {
+					if p.Status.Phase == corev1.PodRunning {
+						containerRunning := false
+						for _, cs := range p.Status.ContainerStatuses {
+							if cs.Name == p.Spec.Containers[0].Name && cs.State.Running != nil {
+								containerRunning = true
+								break
+							}
 						}
-					}
-					if containerRunning {
-						workerRunningCount++
+						if containerRunning {
+							workerRunningCount++
+						}
 					}
 				}
 			}
-		}
-		t.Logf("Checking pod states... Head Running: %t, Workers Running: %d/%d", headRunning, workerRunningCount, expectedWorkerCount)
-		return headRunning && workerRunningCount == expectedWorkerCount, nil
-	})
+			t.Logf("Checking pod states... Head Running: %t, Workers Running: %d/%d",
+				headRunning, workerRunningCount, expectedWorkerCount)
+			return headRunning && workerRunningCount == expectedWorkerCount, nil
+		})
 	if err != nil {
 		t.Fatalf("Pods of cluster %s failed to reach Running phase within %v: %v", clusterName, timeout, err)
 	}
@@ -314,7 +295,8 @@ func triggerRayClusterReconcile(t *testing.T, clusterName string) {
 		Resource: "rayclusters",
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cluster, err := dynamicClient.Resource(gvr).Namespace(testNamespace).Get(t.Context(), clusterName, metav1.GetOptions{})
+		cluster, err := dynamicClient.Resource(gvr).Namespace(testNamespace).
+			Get(t.Context(), clusterName, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -355,29 +337,33 @@ func assertCommonTPUEnvVars(t *testing.T, envVars []corev1.EnvVar) {
 	assert.True(t, hasEnvVar(envVars, tpuDevicePluginAddrEnv), "Missing "+tpuDevicePluginAddrEnv)
 }
 
-func waitForRecreatedPods(t *testing.T, labelSelector string, expectedCount int, initialPodNames map[string]bool) []corev1.Pod {
+func waitForRecreatedPods(
+	t *testing.T, labelSelector string, expectedCount int, initialPodNames map[string]bool,
+) []corev1.Pod {
 	t.Helper()
 	var recreatedPods []corev1.Pod
-	err := wait.PollUntilContextTimeout(t.Context(), 3*time.Second, 90*time.Second, true, func(ctx context.Context) (bool, error) {
-		currentPods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
+	err := wait.PollUntilContextTimeout(t.Context(), 3*time.Second, 90*time.Second,
+		true, func(ctx context.Context) (bool, error) {
+			currentPods, err := clientset.CoreV1().Pods(testNamespace).
+				List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return false, err
+			}
 
-		recreatedPods = nil
-		for _, p := range currentPods.Items {
-			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker && !initialPodNames[p.Name] {
-				if hasEnvVar(p.Spec.Containers[0].Env, tpuWorkerIDEnv) {
-					recreatedPods = append(recreatedPods, p)
+			recreatedPods = nil
+			for _, p := range currentPods.Items {
+				if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker && !initialPodNames[p.Name] {
+					if hasEnvVar(p.Spec.Containers[0].Env, tpuWorkerIDEnv) {
+						recreatedPods = append(recreatedPods, p)
+					}
 				}
 			}
-		}
-		if len(recreatedPods) >= expectedCount {
-			return true, nil
-		}
-		t.Logf("Waiting for recreated pods... (found %d/%d)", len(recreatedPods), expectedCount)
-		return false, nil
-	})
+			if len(recreatedPods) >= expectedCount {
+				return true, nil
+			}
+			t.Logf("Waiting for recreated pods... (found %d/%d)", len(recreatedPods), expectedCount)
+			return false, nil
+		})
 	if err != nil {
 		t.Fatalf("Timed out waiting for recreated pods: %v (found %d/%d)", err, len(recreatedPods), expectedCount)
 	}

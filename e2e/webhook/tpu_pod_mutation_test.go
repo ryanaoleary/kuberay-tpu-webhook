@@ -76,18 +76,23 @@ func TestWebhookMutation_V6eMultiHost(t *testing.T) {
 					hostIPVarFound = true
 					assert.NotNil(t, env.ValueFrom, tpuDevicePluginHostIPEnv+" ValueFrom is nil")
 					assert.NotNil(t, env.ValueFrom.FieldRef, tpuDevicePluginHostIPEnv+" FieldRef is nil")
-					assert.Equal(t, "status.hostIP", env.ValueFrom.FieldRef.FieldPath, tpuDevicePluginHostIPEnv+" FieldPath is incorrect")
+					assert.Equal(t, "status.hostIP", env.ValueFrom.FieldRef.FieldPath,
+						tpuDevicePluginHostIPEnv+" FieldPath is incorrect")
 				}
 			}
 			assert.True(t, hostIPVarFound, tpuDevicePluginHostIPEnv+" environment variable missing")
 
 			// Assert TPU_DEVICE_PLUGIN_ADDR is "$(TPU_DEVICE_PLUGIN_HOST_IP):2112"
-			assert.Equal(t, fmt.Sprintf("$(%s):2112", tpuDevicePluginHostIPEnv), envVarValue(envVars, tpuDevicePluginAddrEnv), tpuDevicePluginAddrEnv+" value is incorrect")
+			assert.Equal(t, fmt.Sprintf("$(%s):2112", tpuDevicePluginHostIPEnv),
+				envVarValue(envVars, tpuDevicePluginAddrEnv),
+				tpuDevicePluginAddrEnv+" value is incorrect")
 
 			// Assert TPU_WORKER_HOSTNAMES matches the exact list of DNS hostnames
 			numOfHosts := int(rayCluster.Spec.WorkerGroupSpecs[0].NumOfHosts)
-			expectedHostnames := buildExpectedHostnames(numOfHosts, fmt.Sprintf("%s-%s", pod.Labels["ray.io/group"], replicaIndex), rayCluster.Name)
-			assert.Equal(t, expectedHostnames, envVarValue(envVars, tpuWorkerHostnamesEnv), tpuWorkerHostnamesEnv+" value is incorrect")
+			expectedHostnames := buildExpectedHostnames(numOfHosts,
+				fmt.Sprintf("%s-%s", pod.Labels[utils.RayNodeGroupLabelKey], replicaIndex), rayCluster.Name)
+			assert.Equal(t, expectedHostnames, envVarValue(envVars, tpuWorkerHostnamesEnv),
+				tpuWorkerHostnamesEnv+" value is incorrect")
 		}
 	}
 
@@ -120,7 +125,8 @@ func TestWebhookMutation_TorchTpuEnvs(t *testing.T) {
 			assert.Equal(t, "2,4,1", topology, "Unexpected TORCH_TPU_TOPOLOGY")
 
 			addresses := envVarValue(envVars, "TORCH_TPU_SLICEBUILDER_ADDRESSES")
-			expectedAddresses := "localhost:8471,localhost:8472,localhost:8473,localhost:8474,localhost:8475,localhost:8476,localhost:8477,localhost:8478"
+			expectedAddresses := "localhost:8471,localhost:8472,localhost:8473,localhost:8474," +
+				"localhost:8475,localhost:8476,localhost:8477,localhost:8478"
 			assert.Equal(t, expectedAddresses, addresses, "Unexpected TORCH_TPU_SLICEBUILDER_ADDRESSES")
 			break
 		}
@@ -164,10 +170,13 @@ func TestWebhookMutation_V6eMultiSlice(t *testing.T) {
 	assert.Equal(t, 4, sliceIds["0"], "Expected 4 worker pods in slice 0")
 	assert.Equal(t, 4, sliceIds["1"], "Expected 4 worker pods in slice 1")
 
-	assert.Equal(t, 1, len(coordinatorAddresses), "All containers in a multi-slice group should share the same coordinator address")
-	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-v6e-multi-slice-headless"], "Unexpected coordinator address")
+	assert.Equal(t, 1, len(coordinatorAddresses),
+		"All containers in a multi-slice group should share the same coordinator address")
+	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-v6e-multi-slice-headless"],
+		"Unexpected coordinator address")
 
-	assert.Equal(t, 1, len(megascalePorts), "All containers in a multi-slice group should share the same port configuration")
+	assert.Equal(t, 1, len(megascalePorts),
+		"All containers in a multi-slice group should share the same port configuration")
 	assert.True(t, megascalePorts["8081"], "Unexpected Multi-slice Megascale port")
 }
 
@@ -263,23 +272,26 @@ func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
 
 	// 3. Delete all four worker pods concurrently
 	deletePodsConcurrently(t, targetPods)
-	t.Log("Target pods deleted concurrently. Polling and triggering KubeRay operator reconciliation until recreation starts...")
+	t.Log("Target pods deleted concurrently. " +
+		"Polling and triggering KubeRay operator reconciliation until recreation starts...")
 
 	// Wait for KubeRay Operator to satisfy its informer expectations and start recreation
-	err := wait.PollUntilContextTimeout(t.Context(), 4*time.Second, 45*time.Second, true, func(ctx context.Context) (bool, error) {
-		triggerRayClusterReconcile(t, clusterName)
-		currentPods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
-		for _, p := range currentPods.Items {
-			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker && !initialPodNames[p.Name] {
-				t.Log("Recreation has successfully started!")
-				return true, nil
+	err := wait.PollUntilContextTimeout(t.Context(), 4*time.Second, 45*time.Second,
+		true, func(ctx context.Context) (bool, error) {
+			triggerRayClusterReconcile(t, clusterName)
+			currentPods, err := clientset.CoreV1().Pods(testNamespace).
+				List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return false, err
 			}
-		}
-		return false, nil
-	})
+			for _, p := range currentPods.Items {
+				if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker && !initialPodNames[p.Name] {
+					t.Log("Recreation has successfully started!")
+					return true, nil
+				}
+			}
+			return false, nil
+		})
 	if err != nil {
 		t.Fatalf("Timed out waiting for KubeRay operator to start recreating pods: %v", err)
 	}
@@ -294,7 +306,8 @@ func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
 	for _, pod := range recreatedPods {
 		sliceID := envVarValue(pod.Spec.Containers[0].Env, megascaleSliceIDEnv)
 		assignedID := envVarValue(pod.Spec.Containers[0].Env, tpuWorkerIDEnv)
-		t.Logf("Re-created multi-slice pod name: %s, Assigned Slice: %s, "+tpuWorkerIDEnv+": %s", pod.Name, sliceID, assignedID)
+		t.Logf("Re-created multi-slice pod name: %s, Assigned Slice: %s, "+
+			tpuWorkerIDEnv+": %s", pod.Name, sliceID, assignedID)
 		if assignedIDsBySlice[sliceID] == nil {
 			assignedIDsBySlice[sliceID] = make(map[string]bool)
 		}
@@ -304,7 +317,8 @@ func TestWebhookMutation_V6ePodChurnMultiSlice(t *testing.T) {
 	for _, sliceIDs := range assignedIDsBySlice {
 		totalUnique += len(sliceIDs)
 	}
-	assert.Equal(t, len(recreatedPods), totalUnique, "Re-created pods should all have unique (SliceID, WorkerID) combinations")
+	assert.Equal(t, len(recreatedPods), totalUnique,
+		"Re-created pods should all have unique (SliceID, WorkerID) combinations")
 }
 
 func TestWebhookMutation_HeterogeneousCluster(t *testing.T) {
@@ -392,11 +406,13 @@ func TestWebhookMutation_V7xMultiHost(t *testing.T) {
 
 			// Assert v7x-specific process address variables dynamically
 			numOfHosts := int(rayCluster.Spec.WorkerGroupSpecs[0].NumOfHosts)
-			// Determine number of TPU containers per pod from manifest resource requests (google.com/tpu: "4")
-			// We'll assume 1 TPU container per pod since requests: 4 for tpu7x (which is a dual-chiplet host with 4 chips total).
+			// We'll assume 1 TPU container per pod since requests: 4 for tpu7x
+			// (which is a dual-chiplet host with 4 chips total).
 			numTpuContainers := 1
-			expectedAddresses := buildExpectedProcessAddresses(numOfHosts, fmt.Sprintf("%s-%s", pod.Labels["ray.io/group"], replicaIndex), rayCluster.Name, numTpuContainers)
-			assert.Equal(t, expectedAddresses, envVarValue(envVars, tpuProcessAddressesEnv), tpuProcessAddressesEnv+" value is incorrect")
+			expectedAddresses := buildExpectedProcessAddresses(numOfHosts,
+				fmt.Sprintf("%s-%s", pod.Labels[utils.RayNodeGroupLabelKey], replicaIndex), rayCluster.Name, numTpuContainers)
+			assert.Equal(t, expectedAddresses, envVarValue(envVars, tpuProcessAddressesEnv),
+				tpuProcessAddressesEnv+" value is incorrect")
 			assert.Equal(t, "8471", envVarValue(envVars, tpuProcessPortEnv), tpuProcessPortEnv+" value is incorrect")
 		}
 	}
@@ -469,15 +485,18 @@ func TestWebhookMutation_V7xMultiSlice(t *testing.T) {
 	assert.Equal(t, 2, sliceIds["0"], "Expected 2 worker pods in slice 0")
 	assert.Equal(t, 2, sliceIds["1"], "Expected 2 worker pods in slice 1")
 
-	assert.Equal(t, 1, len(coordinatorAddresses), "All containers in a multi-slice group should share the same coordinator address")
-	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-7x-multi-slice-headless:8081"], "Unexpected coordinator address")
+	assert.Equal(t, 1, len(coordinatorAddresses),
+		"All containers in a multi-slice group should share the same coordinator address")
+	assert.True(t, coordinatorAddresses["tpu-worker-group-0-0.tpu-7x-multi-slice-headless:8081"],
+		"Unexpected coordinator address")
 }
 
 func TestWebhookMutation_V6eDNSResolution(t *testing.T) {
 	clusterName := "tpu-v6e-multi-host"
 	labelSelector := fmt.Sprintf("%s=%s", utils.RayClusterLabelKey, clusterName)
 
-	pods, err := clientset.CoreV1().Pods(testNamespace).List(t.Context(), metav1.ListOptions{LabelSelector: labelSelector})
+	pods, err := clientset.CoreV1().Pods(testNamespace).
+		List(t.Context(), metav1.ListOptions{LabelSelector: labelSelector})
 	if err != nil || len(pods.Items) == 0 {
 		t.Skip("Skipping DNS resolution test: No multi-host pods found in default namespace.")
 	}
@@ -496,37 +515,39 @@ func TestWebhookMutation_V6eDNSResolution(t *testing.T) {
 
 	// Wait for all worker pods to be in Running phase so DNS endpoints are fully registered
 	t.Log("Waiting for all worker pods to reach Running phase...")
-	err = wait.PollUntilContextTimeout(t.Context(), 5*time.Second, 240*time.Second, true, func(ctx context.Context) (bool, error) {
-		currentPods, err := clientset.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
-		if err != nil {
-			return false, err
-		}
+	err = wait.PollUntilContextTimeout(t.Context(), 5*time.Second, 240*time.Second,
+		true, func(ctx context.Context) (bool, error) {
+			currentPods, err := clientset.CoreV1().Pods(testNamespace).
+				List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+			if err != nil {
+				return false, err
+			}
 
-		allRunning := true
-		workerCount := 0
-		for _, p := range currentPods.Items {
-			if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker {
-				workerCount++
-				if p.Status.Phase != corev1.PodRunning {
-					allRunning = false
-					break
-				}
-				// Ensure container status is also running
-				containerRunning := false
-				for _, cs := range p.Status.ContainerStatuses {
-					if cs.Name == p.Spec.Containers[0].Name && cs.State.Running != nil {
-						containerRunning = true
+			allRunning := true
+			workerCount := 0
+			for _, p := range currentPods.Items {
+				if p.Labels[utils.RayNodeTypeLabelKey] == rayNodeTypeWorker {
+					workerCount++
+					if p.Status.Phase != corev1.PodRunning {
+						allRunning = false
+						break
+					}
+					// Ensure container status is also running
+					containerRunning := false
+					for _, cs := range p.Status.ContainerStatuses {
+						if cs.Name == p.Spec.Containers[0].Name && cs.State.Running != nil {
+							containerRunning = true
+							break
+						}
+					}
+					if !containerRunning {
+						allRunning = false
 						break
 					}
 				}
-				if !containerRunning {
-					allRunning = false
-					break
-				}
 			}
-		}
-		return allRunning && workerCount > 0, nil
-	})
+			return allRunning && workerCount > 0, nil
+		})
 	if err != nil {
 		t.Fatalf("Not all worker pods reached Running phase within 120s: %v", err)
 	}
@@ -549,9 +570,11 @@ func TestWebhookMutation_V6eDNSResolution(t *testing.T) {
 	hostnames := strings.Split(hostnamesStr, ",")
 	for _, hostname := range hostnames {
 		t.Logf("Attempting to resolve hostname %s from inside pod %s...", hostname, workerPod.Name)
-		stdout, stderr, err := execCommandInPod(t, workerPod.Name, workerPod.Spec.Containers[0].Name, []string{"getent", "hosts", hostname})
+		stdout, stderr, err := execCommandInPod(t, workerPod.Name,
+			workerPod.Spec.Containers[0].Name, []string{"getent", "hosts", hostname})
 		if err != nil {
-			t.Errorf("Failed to resolve hostname %s inside container: %v (stderr: %q, stdout: %q)", hostname, err, stderr, stdout)
+			t.Errorf("Failed to resolve hostname %s inside container: %v (stderr: %q, stdout: %q)",
+				hostname, err, stderr, stdout)
 		} else {
 			t.Logf("Successfully resolved %s: %s", hostname, strings.TrimSpace(stdout))
 		}
@@ -565,7 +588,8 @@ func TestWebhookIntegration_RayTPUUtilsAndJAX(t *testing.T) {
 	headPod := waitForAllPodsRunning(t, clusterName, 2, 240*time.Second)
 
 	// Write utility verification script into the head pod
-	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name, "../scripts/verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
+	writeLocalFileToPod(t, headPod.Name, headPod.Spec.Containers[0].Name,
+		"../scripts/verify_tpu_utils.py", "/tmp/verify_tpu_utils.py")
 
 	// Execute verify_tpu_utils.py via Python inside the head pod
 	t.Log("Running verify_tpu_utils.py E2E verification workload...")
