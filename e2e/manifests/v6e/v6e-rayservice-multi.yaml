@@ -33,6 +33,7 @@ spec:
           - image: vllm/vllm-tpu:nightly
             imagePullPolicy: Always
             name: ray-head
+            command: ["pip install protobuf==4.25.3"]
             env:
             - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
               value: python
@@ -80,6 +81,7 @@ spec:
           - image: vllm/vllm-tpu:nightly
             imagePullPolicy: Always
             name: ray-worker
+            command: ["pip install protobuf==4.25.3"]
             env:
             - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
               value: python

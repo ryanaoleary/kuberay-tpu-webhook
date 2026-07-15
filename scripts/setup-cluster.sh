@@ -16,7 +16,6 @@ echo "Using Network: $NETWORK_NAME"
 
 # Proceed with setting up VPC network, GKE cluster, and node pools
 
-
 # Create VPC network if it doesn't exist
 if ! gcloud compute networks describe "$NETWORK_NAME" >/dev/null 2>&1; then
     echo "Creating VPC network $NETWORK_NAME with MTU 8896..."

@@ -25,9 +25,12 @@ TEARDOWN_CLUSTER=false
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --setup) SETUP_CLUSTER=true ;;
-        --teardown) TEARDOWN_CLUSTER=true ;;
-        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    --setup) SETUP_CLUSTER=true ;;
+    --teardown) TEARDOWN_CLUSTER=true ;;
+    *)
+        echo "Unknown parameter passed: $1"
+        exit 1
+        ;;
     esac
     shift
 done
@@ -85,9 +88,11 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 
 if kubectl get secret hf-token-secret -n default >/dev/null 2>&1; then
     echo "Copying hf-token-secret from default namespace to $NAMESPACE..."
-    kubectl get secret hf-token-secret -n default -o yaml | sed 's/namespace: default/namespace: '"$NAMESPACE"'/' | kubectl apply -f -
+    TOKEN=$(kubectl get secret hf-token-secret -n default -o jsonpath='{.data.token}' | base64 -d)
+    kubectl create secret generic hf-token-secret --from-literal=token="$TOKEN" -n "$NAMESPACE"
 else
-    echo "Warning: hf-token-secret not found in default namespace. Downloads of gated/private models may fail."
+    echo "Warning: hf-token-secret not found in default namespace. Creating a dummy secret to allow pods to schedule."
+    kubectl create secret generic hf-token-secret --from-literal=token="dummy" -n "$NAMESPACE"
 fi
 
 # Initialize final exit code
@@ -113,7 +118,6 @@ if [ $GROUP1_EXIT -ne 0 ]; then
     TEST_EXIT_CODE=$GROUP1_EXIT
 fi
 
-
 # 2. Run Multi-Host, Single-Slice Churn, DNS, and V7x Multi-Host tests
 echo "Deploying Multi-Host and V7x Multi-Host manifests inside namespace $NAMESPACE..."
 cat e2e/manifests/v6e/v6e-16-multi-host.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
@@ -129,7 +133,6 @@ kubectl delete -f e2e/manifests/tpu7x/tpu7x-16-multi-host.yaml -n "$NAMESPACE" -
 if [ $GROUP2_EXIT -ne 0 ]; then
     TEST_EXIT_CODE=$GROUP2_EXIT
 fi
-
 
 # 3. Run Megascale Multi-Slice, Multi-Slice Churn, and V7x Multi-Slice tests
 echo "Deploying Megascale Multi-Slice and V7x Multi-Slice manifests inside namespace $NAMESPACE..."
@@ -147,7 +150,6 @@ if [ $GROUP3_EXIT -ne 0 ]; then
     TEST_EXIT_CODE=$GROUP3_EXIT
 fi
 
-
 # 4. Run JAX/XLA and Ray Core TPU Utilities Integration tests
 echo "Deploying JAX & Ray Core Utilities E2E integration manifests inside namespace $NAMESPACE..."
 cat e2e/manifests/v6e/v6e-integration-tpu-utils.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
@@ -158,42 +160,42 @@ GROUP4_EXIT=$?
 set -e
 echo "Cleaning up JAX & Ray Core Utilities manifests..."
 kubectl delete -f e2e/manifests/v6e/v6e-integration-tpu-utils.yaml -n "$NAMESPACE" --ignore-not-found=true || true
-	if [ $GROUP4_EXIT -ne 0 ]; then
-		TEST_EXIT_CODE=$GROUP4_EXIT
-	fi
+if [ $GROUP4_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP4_EXIT
+fi
 
-	# 5. Run RayJob Ray Train + JAX integration tests
-	echo "Deploying RayJob JAX integration manifests inside namespace $NAMESPACE..."
-	kubectl create configmap rayjob-script --from-file=jax_trainer.py=e2e/scripts/jax_trainer.py -n "$NAMESPACE"
-	cat e2e/manifests/v6e/v6e-jax-train-rayjob.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
-	cat e2e/manifests/tpu7x/tpu7x-jax-train-rayjob.yaml | sed "s|rayproject/ray:nightly-py312-tpu|$RAY_TPU7X_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
-	set +e
-	echo "Running RayJob JAX integration tests (Group 5)..."
-	go test -timeout 60m -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestRayJobIntegration"
-	GROUP5_EXIT=$?
-	set -e
-	echo "Cleaning up RayJob integration manifests..."
-	kubectl delete -f e2e/manifests/v6e/v6e-jax-train-rayjob.yaml -n "$NAMESPACE" --ignore-not-found=true || true
-	kubectl delete -f e2e/manifests/tpu7x/tpu7x-jax-train-rayjob.yaml -n "$NAMESPACE" --ignore-not-found=true || true
-	if [ $GROUP5_EXIT -ne 0 ]; then
-		TEST_EXIT_CODE=$GROUP5_EXIT
-	fi
-	# 6. Run RayServe integration tests
-	echo "Deploying RayServe integration manifests inside namespace $NAMESPACE..."
-	kubectl create configmap rayservice-script --from-file=serve_tpu_multihost.py=e2e/scripts/serve_tpu_multihost.py --from-file=sitecustomize.py=e2e/scripts/sitecustomize.py -n "$NAMESPACE"
-	cat e2e/manifests/v6e/v6e-rayservice-single.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
-	cat e2e/manifests/v6e/v6e-rayservice-multi.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
-	set +e
-	echo "Running RayServe integration tests (Group 6)..."
-	go test -timeout 60m -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestRayServiceIntegration"
-	GROUP6_EXIT=$?
-	set -e
-	echo "Cleaning up RayServe integration manifests..."
-	kubectl delete -f e2e/manifests/v6e/v6e-rayservice-single.yaml -n "$NAMESPACE" --ignore-not-found=true || true
-	kubectl delete -f e2e/manifests/v6e/v6e-rayservice-multi.yaml -n "$NAMESPACE" --ignore-not-found=true || true
-	if [ $GROUP6_EXIT -ne 0 ]; then
-		TEST_EXIT_CODE=$GROUP6_EXIT
-	fi
+# 5. Run RayJob Ray Train + JAX integration tests
+echo "Deploying RayJob JAX integration manifests inside namespace $NAMESPACE..."
+kubectl create configmap rayjob-script --from-file=jax_trainer.py=e2e/scripts/jax_trainer.py -n "$NAMESPACE"
+cat e2e/manifests/v6e/v6e-jax-train-rayjob.yaml | sed "s|rayproject/ray:nightly-tpu|$RAY_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/tpu7x/tpu7x-jax-train-rayjob.yaml | sed "s|rayproject/ray:nightly-py312-tpu|$RAY_TPU7X_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+set +e
+echo "Running RayJob JAX integration tests (Group 5)..."
+go test -timeout 60m -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestRayJobIntegration"
+GROUP5_EXIT=$?
+set -e
+echo "Cleaning up RayJob integration manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-jax-train-rayjob.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/tpu7x/tpu7x-jax-train-rayjob.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP5_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP5_EXIT
+fi
+# 6. Run RayServe integration tests
+echo "Deploying RayServe integration manifests inside namespace $NAMESPACE..."
+kubectl create configmap rayservice-script --from-file=serve_tpu_multihost.py=e2e/scripts/serve_tpu_multihost.py -n "$NAMESPACE"
+cat e2e/manifests/v6e/v6e-rayservice-single.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+cat e2e/manifests/v6e/v6e-rayservice-multi.yaml | sed "s|vllm/vllm-tpu:nightly|$RAY_SERVE_IMAGE|g" | kubectl apply -n "$NAMESPACE" -f -
+set +e
+echo "Running RayServe integration tests (Group 6)..."
+go test -timeout 60m -tags=e2e -count=1 -v ./e2e/webhook/... -run "TestRayServiceIntegration"
+GROUP6_EXIT=$?
+set -e
+echo "Cleaning up RayServe integration manifests..."
+kubectl delete -f e2e/manifests/v6e/v6e-rayservice-single.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+kubectl delete -f e2e/manifests/v6e/v6e-rayservice-multi.yaml -n "$NAMESPACE" --ignore-not-found=true || true
+if [ $GROUP6_EXIT -ne 0 ]; then
+    TEST_EXIT_CODE=$GROUP6_EXIT
+fi
 # Clean up dynamic isolated test namespace
 echo "Deleting isolated test namespace $NAMESPACE..."
 kubectl delete namespace "$NAMESPACE" --ignore-not-found=true || true
@@ -203,7 +205,6 @@ if [ $TEST_EXIT_CODE -ne 0 ]; then
     echo "Tests failed with exit code $TEST_EXIT_CODE"
     exit $TEST_EXIT_CODE
 fi
-
 
 # Teardown GKE resources if requested and script finished successfully
 if [ "$TEARDOWN_CLUSTER" = true ]; then
