@@ -64,7 +64,7 @@ spec:
     spec:
       serviceAccountName: kuberay-tpu-webhook
       containers:
-        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.3.1-gke.2@sha256:c392f614b7ffc2071a46b5fa7c1ea309475265be5af806927bb4f87313d9ca43
+        - image: us-docker.pkg.dev/ai-on-gke/kuberay-tpu-webhook/tpu-webhook:v1.4.0-gke.0@sha256:3b7f450262922e9251287fae29b90bab936cc316aff15f42590c002f4c71366a
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
