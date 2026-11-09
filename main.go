@@ -168,7 +168,7 @@ func parsePositive3DDims(topology string) ([]int, bool) {
 }
 
 // parseDynamicSliceIDLabelDims extracts normalized 3D topology dimensions from GKE Dynamic Slicing
-// partition/slice ID labels ("cloud.google.com/gke-tpu-partition-<shape>-id" on tpu7x/tpu7 and
+// partition/slice ID labels ("cloud.google.com/gke-tpu-partition-<shape>-id" on tpu7x and
 // "cloud.google.com/gke-tpu-slice-<shape>-id" on v6e).
 func parseDynamicSliceIDLabelDims(key string) ([]int, bool) {
 	if !strings.HasSuffix(key, gkeTPUIDSuffix) {

@@ -4164,7 +4164,7 @@ func Test_parseDynamicSliceIDLabelDims(t *testing.T) {
 			expectedOK: false,
 		},
 		{
-			name:       "LinkedRunner slice label rejected",
+			name:       "slice label prefix without -id suffix rejected",
 			key:        "cloud.google.com/gke-tpu-slice-my-slice",
 			expectedOK: false,
 		},
